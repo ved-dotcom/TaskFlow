@@ -3,151 +3,31 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>TaskFlow</title>
+  <title>TaskFlow v1</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header class="app-header">
-    <h1>TaskFlow</h1>
-    <nav id="top-nav">
-      <button id="nav-dashboard" class="btn btn--outline">Dashboard</button>
-      <button id="nav-groups" class="btn btn--outline">Groups</button>
-      <button id="nav-admin" class="btn btn--outline hidden">Admin</button>
-      <button id="nav-profile" class="btn btn--outline">Profile</button>
-      <button id="logout" class="btn btn--danger">Logout</button>
-    </nav>
-  </header>
-
+  <header class="app-header"><h1>TaskFlow</h1></header>
   <main class="container">
-    <!-- LOGIN -->
     <section id="login-view" class="view active">
       <div class="card auth-card">
         <h2>Sign in</h2>
-        <input id="login-username" class="form-control" placeholder="Username" autocomplete="off" />
-        <input id="login-password" class="form-control" type="password" placeholder="Password" autocomplete="off" />
-        <div class="flex" style="margin-top:8px">
-          <button id="login-btn" class="btn btn--primary">Login</button>
-          <button id="register-btn" class="btn btn--outline">Register</button>
-        </div>
-        <p class="muted">Seeded users: <b>director1 / pass123</b>, <b>admin1 / pass123</b>, <b>user1 / pass123</b></p>
+        <input id="login-username" class="form-control" placeholder="Username" />
+        <input id="login-password" class="form-control" type="password" placeholder="Password" />
+        <button id="login-btn" class="btn btn--primary">Login</button>
       </div>
     </section>
-
-    <!-- APP -->
     <section id="app-view" class="view">
       <div id="dashboard-view" class="card view active">
-        <div class="space-between">
-          <div>
-            <h3>My Tasks</h3>
-            <div class="muted">Tasks assigned to you</div>
-          </div>
-          <div class="flex">
-            <button id="create-task-btn" class="btn btn--primary">Create Task</button>
-            <button id="refresh-btn" class="btn btn--outline">Refresh</button>
-          </div>
+        <h3>Dashboard</h3>
+        <div id="kanban" style="display:flex;gap:12px;margin-top:14px">
+          <div style="flex:1"><h4>My Groups</h4><div id="groups-col" class="list"></div></div>
+          <div style="flex:1"><h4>My Tasks</h4><div id="tasks-col" class="list"></div></div>
+          <div style="flex:1"><h4>My Mentions</h4><div id="mentions-col" class="list"></div></div>
         </div>
-        <div id="task-list" style="margin-top:12px"></div>
-      </div>
-
-      <div id="groups-view" class="card view hidden">
-        <div class="space-between">
-          <div><h3>Groups</h3><div class="muted">Groups you belong to</div></div>
-          <div><button id="create-group-btn" class="btn btn--primary">Create Group</button></div>
-        </div>
-        <div id="groups-list" class="list" style="margin-top:12px"></div>
-      </div>
-
-      <div id="group-chat-view" class="card view hidden">
-        <div class="space-between">
-          <div><button id="back-to-groups" class="btn btn--outline small">← Back</button> <strong id="chat-group-name"></strong></div>
-          <div class="muted" id="chat-members-count"></div>
-        </div>
-        <div style="margin-top:12px">
-          <div id="chat-messages" style="height:320px;overflow:auto;padding:8px;background:#fff;border-radius:8px;border:1px solid var(--border)"></div>
-          <div style="margin-top:10px">
-            <textarea id="chat-input" class="form-control" rows="3" placeholder="Type a message..."></textarea>
-            <div style="margin-top:8px;display:flex;gap:8px">
-              <button id="send-msg" class="btn btn--primary">Send</button>
-              <button id="cancel-reply" class="btn btn--outline hidden">Cancel Reply</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div id="admin-view" class="card view hidden">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div>
-            <h4>Pending Approvals</h4>
-            <div id="pending-list"></div>
-          </div>
-          <div>
-            <h4>User Management</h4>
-            <div id="user-management"></div>
-          </div>
-        </div>
-      </div>
-
-      <div id="profile-view" class="card view hidden">
-        <h3>My Profile</h3>
-        <p><strong>Username:</strong> <span id="profile-username"></span></p>
-        <p><strong>Role:</strong> <span id="profile-role"></span></p>
       </div>
     </section>
   </main>
-
-  <!-- Modals -->
-  <div id="modal-create-group" class="modal hidden">
-    <div class="modal-content">
-      <h3>Create Group</h3>
-      <label>Group name</label>
-      <input id="group-name" class="form-control" />
-      <label>Members</label>
-      <div id="members-checkboxes" class="scroll-box"></div>
-      <label>Admins</label>
-      <div id="admins-checkboxes" class="scroll-box"></div>
-      <div style="margin-top:12px;display:flex;justify-content:flex-end;gap:8px">
-        <button id="create-group-confirm" class="btn btn--primary">Create</button>
-        <button id="create-group-cancel" class="btn btn--outline">Cancel</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="modal-create-task" class="modal hidden">
-    <div class="modal-content">
-      <h3>Create Task</h3>
-      <label>Title</label>
-      <input id="task-title" class="form-control" />
-      <label>Description</label>
-      <textarea id="task-desc" class="form-control" rows="3"></textarea>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <div>
-          <label>Assign to</label>
-          <select id="task-assign-to" class="form-control"></select>
-        </div>
-        <div>
-          <label>Group</label>
-          <select id="task-group" class="form-control"></select>
-        </div>
-      </div>
-      <div style="margin-top:12px;display:flex;justify-content:flex-end;gap:8px">
-        <button id="create-task-confirm" class="btn btn--primary">Create Task</button>
-        <button id="create-task-cancel" class="btn btn--outline">Cancel</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="modal-reply" class="modal hidden">
-    <div class="modal-content">
-      <h4>Reply</h4>
-      <div id="reply-parent" class="card muted"></div>
-      <textarea id="reply-text" class="form-control" rows="3"></textarea>
-      <div style="margin-top:8px;display:flex;justify-content:flex-end;gap:8px">
-        <button id="reply-send" class="btn btn--primary">Send Reply</button>
-        <button id="reply-cancel" class="btn btn--outline">Cancel</button>
-      </div>
-    </div>
-  </div>
-
   <script type="module" src="app.js"></script>
 </body>
 </html>

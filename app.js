@@ -1,16 +1,19 @@
-// app.js - cleaned and modularized
+// app.js v1 - TaskFlow (vanilla JS, Firestore)
+// READY-TO-UPLOAD VERSION (includes your firebaseConfig).
+// Paste this file into your repo as app.js (no edits needed on iPad).
+
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
   getFirestore, collection, doc, getDocs, addDoc, updateDoc, deleteDoc, getDoc,
   onSnapshot, query, where
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
-/* ---------- CONFIG ---------- */
+/* ---------- FIREBASE CONFIG (your project) ---------- */
 const firebaseConfig = {
-  apiKey: "AIzaSyCt3MkUMeXkQg8JBRm6o5f5RZWJZUJrpQ",
+  apiKey: "AIzaSyCt3MkuMExKqg8J3BRm60Sf5RZWJZUjrpQ",
   authDomain: "taskflow-22167.firebaseapp.com",
   projectId: "taskflow-22167",
-  storageBucket: "taskflow-22167.appspot.com",
+  storageBucket: "taskflow-22167.firebasestorage.app",
   messagingSenderId: "485747269063",
   appId: "1:485747269063:web:1924481b201b0f1d804de2",
   measurementId: "G-D2HQ4YVXL9"
@@ -31,8 +34,6 @@ const appView = document.getElementById('app-view');
 const loginUsername = document.getElementById('login-username');
 const loginPassword = document.getElementById('login-password');
 const loginBtn = document.getElementById('login-btn');
-const registerBtn = document.getElementById('register-btn');
-const logoutBtn = document.getElementById('logout');
 
 const navDashboard = document.getElementById('nav-dashboard');
 const navGroups = document.getElementById('nav-groups');
@@ -45,7 +46,10 @@ const groupChatView = document.getElementById('group-chat-view');
 const adminView = document.getElementById('admin-view');
 const profileView = document.getElementById('profile-view');
 
-const taskList = document.getElementById('task-list');
+const groupsCol = document.getElementById('groups-col');
+const tasksCol = document.getElementById('tasks-col');
+const mentionsCol = document.getElementById('mentions-col');
+
 const createTaskBtn = document.getElementById('create-task-btn');
 const refreshBtn = document.getElementById('refresh-btn');
 
@@ -54,11 +58,11 @@ const createGroupBtn = document.getElementById('create-group-btn');
 
 const chatMessages = document.getElementById('chat-messages');
 const chatInput = document.getElementById('chat-input');
+const mentionSelect = document.getElementById('mention-select');
 const sendMsgBtn = document.getElementById('send-msg');
 const backToGroups = document.getElementById('back-to-groups');
 const chatGroupName = document.getElementById('chat-group-name');
 const chatMembersCount = document.getElementById('chat-members-count');
-const cancelReplyBtn = document.getElementById('cancel-reply');
 
 const pendingList = document.getElementById('pending-list');
 const userManagement = document.getElementById('user-management');
@@ -78,14 +82,24 @@ const taskTitle = document.getElementById('task-title');
 const taskDesc = document.getElementById('task-desc');
 const taskAssignTo = document.getElementById('task-assign-to');
 const taskGroup = document.getElementById('task-group');
+const taskPrivate = document.getElementById('task-private');
 const createTaskConfirm = document.getElementById('create-task-confirm');
 const createTaskCancel = document.getElementById('create-task-cancel');
+
+const modalCreateDM = document.getElementById('modal-create-dm');
+const dmUserSelect = document.getElementById('dm-user-select');
+const createDMConfirm = document.getElementById('create-dm-confirm');
+const createDMCancel = document.getElementById('create-dm-cancel');
 
 const modalReply = document.getElementById('modal-reply');
 const replyParent = document.getElementById('reply-parent');
 const replyText = document.getElementById('reply-text');
 const replySend = document.getElementById('reply-send');
 const replyCancel = document.getElementById('reply-cancel');
+
+const newDmBtn = document.getElementById('new-dm-btn');
+const showCompletedBtn = document.getElementById('show-completed');
+const showArchivedBtn = document.getElementById('show-archived');
 
 /* ---------- HELPERS ---------- */
 function isAdminOrDirector(){ return currentUser && (currentUser.role === 'admin' || currentUser.role === 'director') }
@@ -107,13 +121,20 @@ function showView(name){
     if (name === 'admin') adminView.classList.add('active');
     if (name === 'profile') profileView.classList.add('active');
   }
-  if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'director')) navAdmin.classList.remove('hidden');
-  else navAdmin.classList.add('hidden');
+  if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'director')) {
+    const navAdminBtn = document.getElementById('nav-admin');
+    if (navAdminBtn) navAdminBtn.classList.remove('hidden');
+  } else {
+    const navAdminBtn = document.getElementById('nav-admin');
+    if (navAdminBtn) navAdminBtn.classList.add('hidden');
+  }
+  // create group visibility
+  if (createGroupBtn) createGroupBtn.classList.toggle('hidden', !isAdminOrDirector());
 }
 
 /* ---------- REALTIME LISTENERS ---------- */
 function startListeners(){
-  if (unsub.users) return;
+  if (unsub.users) return; // already listening
   unsub.users = onSnapshot(collection(db,'users'), snap => {
     snap.forEach(d => users[d.id] = { id:d.id, ...d.data() });
     renderPending();
@@ -123,53 +144,163 @@ function startListeners(){
   unsub.groups = onSnapshot(collection(db,'groups'), snap => {
     snap.forEach(d => groups[d.id] = { id:d.id, ...d.data() });
     renderGroups();
+    renderDashboardGroups();
     if (currentGroup && groups[currentGroup.id]) {
       currentGroup = groups[currentGroup.id];
       chatGroupName.textContent = currentGroup.name;
       chatMembersCount.textContent = `${(currentGroup.members||[]).length} members`;
+      populateMentionSelect();
     }
   });
   unsub.tasks = onSnapshot(collection(db,'tasks'), snap => {
     snap.forEach(d => tasks[d.id] = { id:d.id, ...d.data() });
-    renderTasks();
+    renderDashboardTasks();
   });
   unsub.messages = onSnapshot(collection(db,'messages'), snap => {
     snap.forEach(d => messages[d.id] = { id:d.id, ...d.data() });
     if (currentGroup) renderChat(currentGroup.id);
+    renderMentionsColumn();
   });
+}
+
+/* ---------- AUTO-ARCHIVE ---------- */
+async function autoArchiveOldTasks(){
+  try {
+    const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+    const q = await getDocs(collection(db,'tasks'));
+    for (const d of q.docs) {
+      const t = d.data();
+      if (t.status === 'completed' && !t.archived && t.completedAt) {
+        const ts = new Date(t.completedAt).getTime();
+        if (ts < sevenDaysAgo) {
+          await updateDoc(doc(db,'tasks', d.id), { archived: true });
+        }
+      }
+    }
+  } catch(e){ console.error('autoArchive failed', e); }
 }
 
 /* ---------- RENDERS ---------- */
 function renderProfile(){
   if (!currentUser) return;
-  profileUsername.textContent = currentUser.username;
-  profileRole.textContent = currentUser.role;
+  const pUser = document.getElementById('profile-username');
+  const pRole = document.getElementById('profile-role');
+  if (pUser) pUser.textContent = currentUser.username;
+  if (pRole) pRole.textContent = currentUser.role;
 }
 
-function renderTasks(){
-  taskList.innerHTML = '';
-  if (!currentUser) return taskList.innerHTML = '<p class="muted">Please login.</p>';
-  const my = Object.values(tasks).filter(t=>t.assignedTo === currentUser.id);
-  if (my.length === 0) return taskList.innerHTML = '<p class="muted">No tasks assigned.</p>';
-  my.sort((a,b)=> new Date(a.dueDate||0) - new Date(b.dueDate||0));
-  my.forEach(t=>{
+function renderDashboardGroups(){
+  if (!groupsCol) return;
+  groupsCol.innerHTML = '';
+  if (!currentUser) return groupsCol.innerHTML = '<p class="muted">Login to see groups.</p>';
+  const my = Object.values(groups).filter(g => (g.members||[]).includes(currentUser.id));
+  if (my.length === 0) return groupsCol.innerHTML = '<p class="muted">No groups.</p>';
+  my.forEach(g=>{
     const el = document.createElement('div'); el.className='card';
+    const adminsNames = (g.admins||[]).map(a=>users[a]?.username||a).join(', ');
     el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center">
-      <div><strong>${t.title}</strong><div class="muted">${t.priority||'medium'} • Due: ${t.dueDate? new Date(t.dueDate).toLocaleDateString() : '—'}</div></div>
-      <div>${t.status === 'completed' ? '<span class="muted">Completed</span>' : (t.status === 'pending-approval' ? '<span style="color:var(--danger);font-weight:700">Pending</span>' : '')}</div>
-    </div><div style="margin-top:8px">${t.description||''}</div>`;
-    const actions = document.createElement('div'); actions.style.marginTop='8px';
-    if (t.status !== 'completed' && currentUser.id === t.assignedTo) {
-      const btn = document.createElement('button'); btn.className='btn btn--primary small'; btn.textContent='Mark Completed';
-      btn.onclick = async ()=> { try{ await updateDoc(doc(db,'tasks',t.id), { status:'completed', completedAt: new Date().toISOString() }); alert('Task marked completed'); } catch(e){ alert('Failed'); } };
-      actions.appendChild(btn);
-    }
-    el.appendChild(actions);
-    taskList.appendChild(el);
+      <div><strong>${g.name}</strong><div class="muted">Admins: ${adminsNames}</div></div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn btn--outline small" data-open="${g.id}">Open</button>
+        ${(isDirector() ? '<button class="btn btn--danger small" data-delete="'+g.id+'">Delete</button>' : '')}
+      </div>
+    </div>`;
+    const openBtn = el.querySelector('[data-open]');
+    if (openBtn) openBtn.onclick = ()=> openGroup(g.id);
+    const delBtn = el.querySelector('[data-delete]');
+    if (delBtn) delBtn.onclick = async ()=> {
+      if (!confirm(`Delete group "${g.name}"? This will remove its messages and tasks.`)) return;
+      try {
+        // delete messages in group
+        const msgs = await getDocs(query(collection(db,'messages'), where('groupId','==', g.id)));
+        for (const m of msgs.docs) await deleteDoc(doc(db,'messages', m.id));
+        const ts = await getDocs(query(collection(db,'tasks'), where('groupId','==', g.id)));
+        for (const t of ts.docs) await deleteDoc(doc(db,'tasks', t.id));
+        await deleteDoc(doc(db,'groups', g.id));
+        alert('Group deleted');
+      } catch(e){ console.error(e); alert('Delete failed'); }
+    };
+    groupsCol.appendChild(el);
   });
 }
 
+function renderDashboardTasks(){
+  if (!tasksCol) return;
+  tasksCol.innerHTML = '';
+  if (!currentUser) return tasksCol.innerHTML = '<p class="muted">Login to see tasks.</p>';
+  const my = Object.values(tasks).filter(t => (t.assignedTo === currentUser.id));
+  const active = my.filter(t => !t.archived && t.status !== 'completed');
+  const completed = my.filter(t => !t.archived && t.status === 'completed');
+  const archived = my.filter(t => t.archived);
+  // Active
+  if (active.length === 0) tasksCol.innerHTML = '<p class="muted">No active tasks.</p>';
+  active.forEach(t=>{
+    const el = document.createElement('div'); el.className='card';
+    el.innerHTML = `<div><strong>${t.title}</strong><div class="muted">${t.priority||'medium'} • ${t.groupId ? ('Group: ' + (groups[t.groupId]?.name||t.groupId)) : 'Personal'}</div></div>
+      <div style="margin-top:8px">${t.description||''}</div>`;
+    const actions = document.createElement('div'); actions.style.marginTop='8px';
+    const btn = document.createElement('button'); btn.className='btn btn--primary small'; btn.textContent='Mark Completed';
+    btn.onclick = async ()=> { try{ await updateDoc(doc(db,'tasks',t.id), { status:'completed', completedAt: new Date().toISOString() }); alert('Completed'); } catch(e){ alert('Failed'); } };
+    actions.appendChild(btn);
+    el.appendChild(actions);
+    tasksCol.appendChild(el);
+  });
+  // Completed
+  if (completed.length) {
+    const hdr = document.createElement('div'); hdr.className='card'; hdr.innerHTML='<strong>Recently Completed</strong>';
+    tasksCol.appendChild(hdr);
+    completed.forEach(t=>{
+      const el = document.createElement('div'); el.className='card';
+      el.innerHTML = `<div><strong>${t.title}</strong><div class="muted">Completed at: ${t.completedAt ? new Date(t.completedAt).toLocaleString() : ''}</div></div>
+        <div style="margin-top:8px">${t.description||''}</div>`;
+      const actions = document.createElement('div'); actions.style.marginTop='8px';
+      const undo = document.createElement('button'); undo.className='btn btn--outline small'; undo.textContent='Undo';
+      undo.onclick = async ()=> { try{ await updateDoc(doc(db,'tasks',t.id), { status:'in-progress', completedAt: null }); alert('Restored'); } catch(e){ alert('Failed'); } };
+      actions.appendChild(undo);
+      if (isAdminOrDirector()) {
+        const del = document.createElement('button'); del.className='btn btn--danger small'; del.textContent='Delete';
+        del.onclick = async ()=> { if(!confirm('Delete permanently?')) return; try{ await deleteDoc(doc(db,'tasks',t.id)); alert('Deleted'); } catch(e){ alert('Fail'); } };
+        actions.appendChild(del);
+      }
+      el.appendChild(actions);
+      tasksCol.appendChild(el);
+    });
+  }
+  // Archived view toggled by button; hidden by default
+  if (showCompletedBtn) showCompletedBtn.onclick = ()=> {
+    const c = Object.values(tasks).filter(t=>t.assignedTo===currentUser.id && t.status==='completed' && !t.archived);
+    if (c.length===0) return alert('No completed tasks');
+    const list = c.map(t=>`${t.title} — completedAt: ${t.completedAt||''}`).join('\\n');
+    alert('Completed tasks:\\n' + list);
+  };
+  if (showArchivedBtn) showArchivedBtn.onclick = async ()=> {
+    const a = Object.values(tasks).filter(t=>t.assignedTo===currentUser.id && t.archived);
+    if (a.length===0) return alert('No archived tasks');
+    const list = a.map(t=>`${t.title} — archived`).join('\\n');
+    alert('Archived tasks:\\n' + list);
+  };
+}
+
+function renderMentionsColumn(){
+  if (!mentionsCol) return;
+  mentionsCol.innerHTML = '';
+  if (!currentUser) return mentionsCol.innerHTML = '<p class="muted">Login to see mentions.</p>';
+  const m = Object.values(messages).filter(msg => Array.isArray(msg.mentions) && msg.mentions.includes(currentUser.id));
+  if (m.length === 0) return mentionsCol.innerHTML = '<p class="muted">No mentions.</p>';
+  m.sort((a,b)=> new Date(b.timestamp||0) - new Date(a.timestamp||0));
+  m.forEach(msg=>{
+    const el = document.createElement('div'); el.className='card';
+    const from = users[msg.userId]?.username || msg.userId;
+    el.innerHTML = `<div><strong>${from}</strong> <div class="muted">${msg.groupId ? ('in ' + (groups[msg.groupId]?.name||msg.groupId)) : 'Direct'}</div></div>
+      <div style="margin-top:8px">${msg.content}</div>
+      <div class="muted" style="margin-top:6px">${new Date(msg.timestamp||'').toLocaleString()}</div>`;
+    mentionsCol.appendChild(el);
+  });
+}
+
+/* ---------- GROUPS & CHAT ---------- */
 function renderGroups(){
+  if (!groupsList) return;
   groupsList.innerHTML = '';
   if (!currentUser) return groupsList.innerHTML = '<p class="muted">Login to see groups.</p>';
   const my = Object.values(groups).filter(g => (g.members||[]).includes(currentUser.id));
@@ -181,29 +312,42 @@ function renderGroups(){
       <div><strong>${g.name}</strong><div class="muted">Admins: ${adminsNames}</div></div>
       <div style="display:flex;gap:8px;align-items:center">
         <button class="btn btn--outline small" data-open="${g.id}">Open</button>
-        ${(isAdminOrDirector() && (g.admins||[]).includes(currentUser.id)) ? '<button class="btn btn--danger small" data-delete="'+g.id+'">Delete</button>' : ''}
+        ${(isAdminOrDirector() && (g.admins||[]).includes(currentUser.id) ? '<button class="btn btn--danger small" data-delete="'+g.id+'">Delete</button>' : '')}
       </div>
     </div>`;
-    el.querySelector('[data-open]').onclick = ()=> openGroup(g.id);
+    const openBtn = el.querySelector('[data-open]');
+    if (openBtn) openBtn.onclick = ()=> openGroup(g.id);
     const delBtn = el.querySelector('[data-delete]');
     if (delBtn) delBtn.onclick = async ()=> {
-      if (!confirm(`Delete group "${g.name}"?`)) return;
+      if (!confirm(`Delete group "${g.name}"? This will remove its messages and tasks.`)) return;
       try {
         const msgs = await getDocs(query(collection(db,'messages'), where('groupId','==', g.id)));
-        for (const m of msgs.docs) await deleteDoc(doc(db,'messages',m.id));
+        for (const m of msgs.docs) await deleteDoc(doc(db,'messages', m.id));
         const ts = await getDocs(query(collection(db,'tasks'), where('groupId','==', g.id)));
-        for (const t of ts.docs) await deleteDoc(doc(db,'tasks',t.id));
+        for (const t of ts.docs) await deleteDoc(doc(db,'tasks', t.id));
         await deleteDoc(doc(db,'groups', g.id));
         alert('Group deleted');
-      } catch(e){ console.error(e); alert('Failed'); }
+      } catch(e){ console.error(e); alert('Delete failed'); }
     };
     groupsList.appendChild(el);
   });
 }
 
+function populateMentionSelect(){
+  if (!mentionSelect) return;
+  mentionSelect.innerHTML = '';
+  if (!currentGroup) return;
+  const members = (currentGroup.members || []).map(id => ({ id, username: users[id]?.username || id }));
+  members.forEach(m => {
+    const opt = document.createElement('option'); opt.value = m.id; opt.textContent = m.username; mentionSelect.appendChild(opt);
+  });
+}
+
 function renderChat(groupId){
+  if (!chatMessages) return;
   chatMessages.innerHTML = '';
   const msgs = Object.values(messages).filter(m=>m.groupId === groupId).sort((a,b)=> new Date(a.timestamp||0)-new Date(b.timestamp||0));
+  // threaded replies
   const children = {};
   msgs.forEach(m=>{ children[m.id] = children[m.id] || []; });
   msgs.forEach(m=>{ if(m.parentMessageId) children[m.parentMessageId] = children[m.parentMessageId] || [], children[m.parentMessageId].push(m); });
@@ -213,18 +357,14 @@ function renderChat(groupId){
     const meta = document.createElement('div'); meta.className='meta'; meta.textContent = `${name} • ${new Date(m.timestamp||'').toLocaleString()}`;
     div.appendChild(meta);
     const content = document.createElement('div'); content.textContent = m.content; div.appendChild(content);
+    if (Array.isArray(m.mentions) && m.mentions.length) {
+      const mm = document.createElement('div'); mm.className='muted'; mm.textContent = 'Mentioned: ' + m.mentions.map(id=>users[id]?.username||id).join(', ');
+      div.appendChild(mm);
+    }
     const actions = document.createElement('div'); actions.style.marginTop='8px'; actions.style.display='flex'; actions.style.gap='8px';
     const replyBtn = document.createElement('button'); replyBtn.className='btn btn--outline small'; replyBtn.textContent='Reply';
     replyBtn.onclick = ()=> { replyTo = m; replyParent.textContent = m.content; modalReply.classList.remove('hidden'); };
     actions.appendChild(replyBtn);
-    if (m.type === 'task-assignment' && m.taskId) {
-      const t = tasks[m.taskId];
-      if (t && t.status !== 'completed' && currentUser.id === t.assignedTo) {
-        const mark = document.createElement('button'); mark.className='btn btn--primary small'; mark.textContent='Mark Complete';
-        mark.onclick = async ()=> { try{ await updateDoc(doc(db,'tasks',t.id), { status:'completed', completedAt: new Date().toISOString() }); alert('Marked complete'); } catch(e){alert('Failed')} };
-        actions.appendChild(mark);
-      }
-    }
     div.appendChild(actions);
     container.appendChild(div);
     const ch = children[m.id] || [];
@@ -239,8 +379,9 @@ function renderChat(groupId){
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
-/* Admin UI */
+/* ---------- ADMIN UI ---------- */
 function renderPending(){
+  if (!pendingList) return;
   pendingList.innerHTML = '';
   if (!isDirector()) { pendingList.innerHTML = '<p class="muted">Only director can see pending approvals.</p>'; return; }
   const pending = Object.values(users).filter(u=>u.status === 'pending');
@@ -255,12 +396,13 @@ function renderPending(){
       </div>
     </div>`;
     el.querySelector('.btn--primary').onclick = async ()=> { try{ await updateDoc(doc(db,'users',u.id), { status:'active' }); alert('Approved'); } catch(e){alert('Fail')} };
-    el.querySelector('.btn--danger').onclick = async ()=> { if(!confirm('Remove user?')) return; try{ await deleteDoc(doc(db,'users',u.id)); alert('Removed'); } catch(e){alert('Fail')} };
+    el.querySelector('.btn--danger').onclick = async ()=> { if(!confirm('Remove user?')) return; try{ await deleteUser(u.id); alert('Removed'); } catch(e){alert('Fail')} };
     pendingList.appendChild(el);
   });
 }
 
 function renderUserManagement(){
+  if (!userManagement) return;
   userManagement.innerHTML = '';
   if (!isDirector()) { userManagement.innerHTML = '<p class="muted">Only director can manage users.</p>'; return; }
   const act = Object.values(users).filter(u=>u.status === 'active');
@@ -278,7 +420,7 @@ function renderUserManagement(){
     el.querySelector('.set-user').onclick = ()=> changeRole(u.id,'user');
     el.querySelector('.set-admin').onclick = ()=> changeRole(u.id,'admin');
     el.querySelector('.set-dir').onclick = ()=> changeRole(u.id,'director');
-    el.querySelector('.remove-user').onclick = async ()=> { if(!confirm('Remove?')) return; try{ await deleteDoc(doc(db,'users',u.id)); alert('Removed'); } catch(e){alert('Fail')} };
+    el.querySelector('.remove-user').onclick = async ()=> { if(!confirm('Remove?')) return; try{ await deleteUser(u.id); alert('Removed'); } catch(e){alert('Fail')} };
     userManagement.appendChild(el);
   });
 }
@@ -288,7 +430,7 @@ async function changeRole(uid, role){
   try { await updateDoc(doc(db,'users',uid), { role }); alert('Role updated'); } catch(e){ alert('Failed'); }
 }
 
-/* ACTIONS */
+/* ---------- ACTIONS ---------- */
 loginBtn.onclick = async ()=>{
   const uname = loginUsername.value.trim();
   const pass = loginPassword.value.trim();
@@ -305,6 +447,7 @@ loginBtn.onclick = async ()=>{
 
     startListeners();
 
+    // immediate load
     const [us, gs, ts, ms] = await Promise.all([
       getDocs(collection(db,'users')),
       getDocs(collection(db,'groups')),
@@ -316,10 +459,14 @@ loginBtn.onclick = async ()=>{
     ts.forEach(d=> tasks[d.id] = { id:d.id, ...d.data() });
     ms.forEach(d=> messages[d.id] = { id:d.id, ...d.data() });
 
+    // auto-archive run once at login
+    autoArchiveOldTasks();
+
     showView('dashboard');
     renderProfile();
-    renderTasks();
-    renderGroups();
+    renderDashboardGroups();
+    renderDashboardTasks();
+    renderMentionsColumn();
   } catch(e){ console.error(e); alert('Login failed'); }
 };
 
@@ -343,12 +490,14 @@ logoutBtn.onclick = ()=>{
   showView('login');
 };
 
-navDashboard.onclick = ()=> showView('dashboard');
-navGroups.onclick = ()=> showView('groups');
-navAdmin.onclick = ()=> { showView('admin'); renderPending(); renderUserManagement(); };
-navProfile.onclick = ()=> { showView('profile'); renderProfile(); };
+/* NAV */
+if (navDashboard) navDashboard.onclick = ()=> { showView('dashboard'); renderDashboardGroups(); renderDashboardTasks(); renderMentionsColumn(); };
+if (navGroups) navGroups.onclick = ()=> { showView('groups'); renderGroups(); };
+if (navAdmin) navAdmin.onclick = ()=> { showView('admin'); renderPending(); renderUserManagement(); };
+if (navProfile) navProfile.onclick = ()=> { showView('profile'); renderProfile(); };
 
-createGroupBtn.onclick = ()=>{
+/* Create Group */
+if (createGroupBtn) createGroupBtn.onclick = ()=>{
   if (!isAdminOrDirector()) return alert('Only admins/directors can create groups');
   membersBoxes.innerHTML = ''; adminsBoxes.innerHTML = '';
   Object.values(users).filter(u=>u.status==='active').forEach(u=>{
@@ -362,15 +511,15 @@ createGroupBtn.onclick = ()=>{
   groupNameInput.value = '';
   modalCreateGroup.classList.remove('hidden');
 };
-createGroupCancel.onclick = ()=> modalCreateGroup.classList.add('hidden');
-createGroupConfirm.onclick = async ()=>{
+if (createGroupCancel) createGroupCancel.onclick = ()=> modalCreateGroup.classList.add('hidden');
+if (createGroupConfirm) createGroupConfirm.onclick = async ()=>{
   const name = groupNameInput.value.trim();
   if (!name) return alert('Group name required');
   const memberIds = Array.from(membersBoxes.querySelectorAll('input:checked')).map(i=>i.value);
   const adminIds = Array.from(adminsBoxes.querySelectorAll('input:checked')).map(i=>i.value);
   if (adminIds.length === 0) return alert('Select at least one admin');
   try {
-    const gref = await addDoc(collection(db,'groups'), { name, members: memberIds, admins: adminIds, createdAt: new Date().toISOString() });
+    const gref = await addDoc(collection(db,'groups'), { name, members: memberIds, admins: adminIds, type:'team', createdAt: new Date().toISOString() });
     for (const uid of memberIds) {
       try {
         const uref = doc(db,'users', uid);
@@ -387,57 +536,127 @@ createGroupConfirm.onclick = async ()=>{
   } catch(e){ console.error(e); alert('Create group failed'); }
 };
 
-createTaskBtn.onclick = ()=>{
+/* Create Task */
+if (createTaskBtn) createTaskBtn.onclick = ()=>{
+  if (!taskAssignTo) return;
   taskAssignTo.innerHTML = '';
   Object.values(users).filter(u=>u.status==='active').forEach(u => {
     const opt = document.createElement('option'); opt.value = u.id; opt.textContent = u.username; taskAssignTo.appendChild(opt);
   });
-  taskGroup.innerHTML = '';
+  taskGroup.innerHTML = '<option value="">(no group - personal)</option>';
   Object.values(groups).filter(g => (g.members||[]).includes(currentUser.id)).forEach(g => {
     const opt = document.createElement('option'); opt.value = g.id; opt.textContent = g.name; taskGroup.appendChild(opt);
   });
-  taskTitle.value=''; taskDesc.value=''; taskGroup.value = taskGroup.options.length ? taskGroup.options[0].value : '';
+  taskTitle.value=''; taskDesc.value=''; taskPrivate.checked = false;
   modalCreateTask.classList.remove('hidden');
 };
-createTaskCancel.onclick = ()=> modalCreateTask.classList.add('hidden');
-createTaskConfirm.onclick = async ()=>{
+if (createTaskCancel) createTaskCancel.onclick = ()=> modalCreateTask.classList.add('hidden');
+if (createTaskConfirm) createTaskConfirm.onclick = async ()=>{
   const title = taskTitle.value.trim(); const description = taskDesc.value.trim();
-  const assignedTo = taskAssignTo.value; const groupId = taskGroup.value;
-  if (!title || !assignedTo || !groupId) return alert('Fill required fields');
+  const assignedTo = taskAssignTo.value; const groupId = taskGroup.value || null;
+  const isPrivate = taskPrivate.checked;
+  if (!title || !assignedTo) return alert('Fill required fields');
   try {
-    const tref = await addDoc(collection(db,'tasks'), { title, description, assignedBy: currentUser.id, assignedTo, status:'in-progress', priority:'medium', dueDate:null, groupId, createdAt:new Date().toISOString() });
-    await addDoc(collection(db,'messages'), { groupId, userId: currentUser.id, content: `Task assigned: ${title}`, type:'task-assignment', parentMessageId:null, taskId: tref.id, timestamp: new Date().toISOString() });
+    const data = { title, description, assignedBy: currentUser.id, assignedTo, status:'in-progress', priority:'medium', dueDate:null, groupId: isPrivate ? null : groupId, private: !!isPrivate, archived:false, createdAt:new Date().toISOString() };
+    const tref = await addDoc(collection(db,'tasks'), data);
+    if (!isPrivate && groupId) {
+      await addDoc(collection(db,'messages'), { groupId, userId: currentUser.id, content: `Task assigned: ${title}`, type:'task-assignment', parentMessageId:null, taskId: tref.id, timestamp: new Date().toISOString() });
+    } else {
+      await addDoc(collection(db,'messages'), { groupId: null, userId: currentUser.id, content: `Private task assigned to ${users[assignedTo]?.username||assignedTo}: ${title}`, type:'private-task', parentMessageId:null, taskId: tref.id, timestamp: new Date().toISOString(), mentions: [assignedTo] });
+    }
     alert('Task created'); modalCreateTask.classList.add('hidden');
   } catch(e){ console.error(e); alert('Create task failed'); }
 };
 
-sendMsgBtn.onclick = async ()=>{
+/* Create DM */
+if (newDmBtn) newDmBtn.onclick = ()=>{
+  dmUserSelect.innerHTML = '';
+  Object.values(users).filter(u=>u.status==='active' && u.id !== currentUser.id).forEach(u=>{
+    const opt = document.createElement('option'); opt.value = u.id; opt.textContent = u.username; dmUserSelect.appendChild(opt);
+  });
+  modalCreateDM.classList.remove('hidden');
+};
+if (createDMCancel) createDMCancel.onclick = ()=> modalCreateDM.classList.add('hidden');
+if (createDMConfirm) createDMConfirm.onclick = async ()=>{
+  const other = dmUserSelect.value;
+  if (!other) return alert('Select a user');
+  try {
+    const existing = Object.values(groups).find(g => g.type === 'dm' && (g.members||[]).includes(currentUser.id) && (g.members||[]).includes(other));
+    if (existing) {
+      modalCreateDM.classList.add('hidden');
+      openGroup(existing.id);
+      return;
+    }
+    const name = `DM: ${users[other]?.username||other}`;
+    const gref = await addDoc(collection(db,'groups'), { name, members: [currentUser.id, other], admins: [], type:'dm', createdAt: new Date().toISOString() });
+    modalCreateDM.classList.add('hidden');
+    openGroup(gref.id);
+  } catch(e){ console.error(e); alert('Create DM failed'); }
+};
+
+/* Chat send & reply */
+if (sendMsgBtn) sendMsgBtn.onclick = async ()=>{
   if (!currentGroup) return alert('Open a group');
   const text = chatInput.value.trim(); if (!text) return;
-  try { await addDoc(collection(db,'messages'), { groupId: currentGroup.id, userId: currentUser.id, content:text, type:'message', parentMessageId:null, taskId:null, timestamp:new Date().toISOString() }); chatInput.value=''; }
+  const mentions = Array.from(mentionSelect.selectedOptions).map(o=>o.value);
+  try { await addDoc(collection(db,'messages'), { groupId: currentGroup.type === 'dm' ? currentGroup.id : currentGroup.id, userId: currentUser.id, content:text, type:'message', parentMessageId:null, taskId:null, timestamp:new Date().toISOString(), mentions }); chatInput.value=''; mentionSelect.selectedIndex = -1; }
   catch(e){ console.error(e); alert('Send failed'); }
 };
-replySend.onclick = async ()=>{
+if (replySend) replySend.onclick = async ()=>{
   const text = replyText.value.trim(); if (!text || !replyTo) return;
   try { await addDoc(collection(db,'messages'), { groupId: replyTo.groupId, userId: currentUser.id, content:text, type:'message', parentMessageId: replyTo.id, taskId:null, timestamp:new Date().toISOString() }); replyText.value=''; replyTo=null; modalReply.classList.add('hidden'); }
   catch(e){ console.error(e); alert('Reply failed'); }
 };
-replyCancel.onclick = ()=> { replyTo=null; modalReply.classList.add('hidden'); };
+if (replyCancel) replyCancel.onclick = ()=> { replyTo=null; modalReply.classList.add('hidden'); };
 
+/* open group by id */
 async function openGroup(groupId){
-  const gdoc = groups[groupId] || (await getDoc(doc(db,'groups',groupId))).data();
-  if (!gdoc) return alert('Group not found');
-  currentGroup = { id: groupId, ...gdoc };
-  chatGroupName.textContent = currentGroup.name;
-  chatMembersCount.textContent = `${(currentGroup.members||[]).length} members`;
+  const gDoc = groups[groupId];
+  const g = gDoc || (await getDoc(doc(db,'groups',groupId))).data();
+  if (!g) return alert('Group not found');
+  if (!g.members || !g.members.includes(currentUser.id)) return alert('Access denied — you are not a member of this group.');
+  currentGroup = { id: groupId, ...g };
+  if (chatGroupName) chatGroupName.textContent = currentGroup.name;
+  if (chatMembersCount) chatMembersCount.textContent = `${(currentGroup.members||[]).length} members`;
   showView('groupChat');
+  populateMentionSelect();
   renderChat(groupId);
 }
-backToGroups.onclick = ()=> { currentGroup=null; showView('groups'); };
-refreshBtn.onclick = ()=> { renderTasks(); renderGroups(); if (currentGroup) renderChat(currentGroup.id); };
-loginPassword.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') loginBtn.click(); });
+if (backToGroups) backToGroups.onclick = ()=> { currentGroup=null; showView('groups'); };
 
-/* TEMP DEBUG API */
+/* Delete user (director action) */
+async function deleteUser(uid){
+  if (!isDirector()) return alert('Only director can remove users');
+  if (!confirm('Really delete user and remove from groups/tasks?')) return;
+  try {
+    const groupIds = Object.values(groups).filter(g => (g.members||[]).includes(uid)).map(g=>g.id);
+    for (const gid of groupIds) {
+      const g = groups[gid];
+      if (g.type === 'dm') {
+        const msgs = await getDocs(query(collection(db,'messages'), where('groupId','==', gid)));
+        for (const m of msgs.docs) await deleteDoc(doc(db,'messages', m.id));
+        await deleteDoc(doc(db,'groups', gid));
+      } else {
+        const m = (g.members||[]).filter(x=>x!==uid);
+        const a = (g.admins||[]).filter(x=>x!==uid);
+        await updateDoc(doc(db,'groups', gid), { members: m, admins: a });
+      }
+    }
+    const ts = await getDocs(query(collection(db,'tasks'), where('assignedTo','==', uid)));
+    for (const t of ts.docs) {
+      await updateDoc(doc(db,'tasks', t.id), { assignedTo: null });
+    }
+    await deleteDoc(doc(db,'users', uid));
+  } catch(e){ console.error('deleteUser failed', e); throw e; }
+}
+
+/* refresh */
+if (refreshBtn) refreshBtn.onclick = ()=> { renderDashboardGroups(); renderDashboardTasks(); renderMentionsColumn(); if (currentGroup) renderChat(currentGroup.id); };
+
+/* keyboard enter login convenience */
+if (loginPassword) loginPassword.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') loginBtn.click(); });
+
+/* TEMP DEBUG API (kept small) */
 window._tf_app = {
   getState: ()=> ({
     currentUser: currentUser ? { id: currentUser.id ?? currentUser.username, username: currentUser.username, role: currentUser.role, status: currentUser.status } : null,
@@ -448,4 +667,5 @@ window._tf_app = {
   startListeners: ()=> { try{ startListeners(); return {ok:true}; } catch(e){ return {ok:false, error:String(e)}; } }
 };
 
+/* initial view */
 showView('login');
