@@ -7,17 +7,40 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header class="app-header"><h1>TaskFlow</h1></header>
+  <header class="app-header">
+    <div class="container" style="display:flex;justify-content:space-between;align-items:center">
+      <h1>TaskFlow</h1>
+      <nav style="display:flex;gap:8px;align-items:center">
+        <button id="nav-dashboard" class="btn btn--outline">Dashboard</button>
+        <button id="nav-groups" class="btn btn--outline">Groups</button>
+        <button id="nav-admin" class="btn btn--outline hidden" >Admin</button>
+        <button id="nav-profile" class="btn btn--outline">Profile</button>
+        <button id="create-task-btn" class="btn btn--outline">Create Task</button>
+        <button id="create-group-btn" class="btn btn--outline hidden">Create Group</button>
+        <button id="new-dm-btn" class="btn btn--outline">New DM</button>
+        <button id="refresh-btn" class="btn btn--outline">Refresh</button>
+        <button id="logout-btn" class="btn btn--primary">Logout</button>
+      </nav>
+    </div>
+  </header>
+
   <main class="container">
+    <!-- LOGIN -->
     <section id="login-view" class="view active">
-      <div class="card auth-card">
+      <div class="card auth-card" style="max-width:640px;margin:18px auto;">
         <h2>Sign in</h2>
         <input id="login-username" class="form-control" placeholder="Username" />
         <input id="login-password" class="form-control" type="password" placeholder="Password" />
-        <button id="login-btn" class="btn btn--primary">Login</button>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="login-btn" class="btn btn--primary">Login</button>
+          <button id="register-btn" class="btn btn--outline">Register</button>
+        </div>
       </div>
     </section>
+
+    <!-- APP -->
     <section id="app-view" class="view">
+      <!-- Dashboard -->
       <div id="dashboard-view" class="card view active">
         <h3>Dashboard</h3>
         <div id="kanban" style="display:flex;gap:12px;margin-top:14px">
@@ -26,8 +49,112 @@
           <div style="flex:1"><h4>My Mentions</h4><div id="mentions-col" class="list"></div></div>
         </div>
       </div>
+
+      <!-- Groups page -->
+      <div id="groups-view" class="card view hidden">
+        <h3>Groups</h3>
+        <div id="groups-list" class="list"></div>
+      </div>
+
+      <!-- Group Chat -->
+      <div id="group-chat-view" class="card view hidden">
+        <button id="back-to-groups" class="btn btn--outline">← Back to Groups</button>
+        <h3 id="chat-group-name">Group</h3>
+        <div id="chat-members-count" class="muted">0 members</div>
+        <div id="chat-messages" style="height:340px;overflow:auto;margin-top:12px;background:#fff;padding:10px;border-radius:8px"></div>
+        <div style="display:flex;gap:8px;margin-top:8px;align-items:flex-start">
+          <select id="mention-select" multiple style="min-width:160px;padding:6px;border-radius:6px"></select>
+          <textarea id="chat-input" class="form-control" rows="3" placeholder="Type a message..."></textarea>
+          <button id="send-msg" class="btn btn--primary">Send</button>
+        </div>
+      </div>
+
+      <!-- Admin -->
+      <div id="admin-view" class="card view hidden">
+        <h3>Admin Panel</h3>
+        <div style="display:flex;gap:12px">
+          <div style="flex:1">
+            <h4>Pending Approvals</h4>
+            <div id="pending-list" class="list"></div>
+          </div>
+          <div style="flex:1">
+            <h4>User Management</h4>
+            <div id="user-management" class="list"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Profile -->
+      <div id="profile-view" class="card view hidden">
+        <h3>Profile</h3>
+        <p><b>Username:</b> <span id="profile-username"></span></p>
+        <p><b>Role:</b> <span id="profile-role"></span></p>
+      </div>
     </section>
   </main>
+
+  <!-- Minimal modals / helpers used by app.js (kept simple) -->
+  <div id="modal-create-group" class="modal hidden" aria-hidden="true">
+    <div class="modal-content card">
+      <h3>Create Group</h3>
+      <input id="group-name" class="form-control" placeholder="Group name" />
+      <div style="display:flex;gap:10px">
+        <div style="flex:1">
+          <h4>Members</h4>
+          <div id="members-checkboxes" class="list"></div>
+        </div>
+        <div style="flex:1">
+          <h4>Admins</h4>
+          <div id="admins-checkboxes" class="list"></div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button id="create-group-confirm" class="btn btn--primary">Create</button>
+        <button id="create-group-cancel" class="btn btn--outline">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-create-task" class="modal hidden" aria-hidden="true">
+    <div class="modal-content card">
+      <h3>Create Task</h3>
+      <input id="task-title" class="form-control" placeholder="Title" />
+      <textarea id="task-desc" class="form-control" rows="3" placeholder="Description"></textarea>
+      <select id="task-assign-to" class="form-control"></select>
+      <select id="task-group" class="form-control"></select>
+      <label style="display:flex;gap:8px;align-items:center"><input id="task-private" type="checkbox" /> Private (personal)</label>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button id="create-task-confirm" class="btn btn--primary">Create</button>
+        <button id="create-task-cancel" class="btn btn--outline">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-create-dm" class="modal hidden" aria-hidden="true">
+    <div class="modal-content card">
+      <h3>Start DM</h3>
+      <select id="dm-user-select" class="form-control"></select>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button id="create-dm-confirm" class="btn btn--primary">Start</button>
+        <button id="create-dm-cancel" class="btn btn--outline">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-reply" class="modal hidden" aria-hidden="true">
+    <div class="modal-content card">
+      <h3>Reply</h3>
+      <div id="reply-to-message-content" class="muted" style="margin-bottom:8px"></div>
+      <form id="reply-form">
+        <textarea id="reply-input" class="form-control" rows="3" placeholder="Reply..."></textarea>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button id="reply-send" type="submit" class="btn btn--primary">Send</button>
+          <button id="cancel-reply-btn" type="button" class="btn btn--outline">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <script type="module" src="app.js"></script>
 </body>
 </html>
