@@ -1,9 +1,15 @@
 // ============================================================================
-// TASKFLOW - COMPLETE PRODUCTION APPLICATION
+// TASKFLOW - COMPLETE PRODUCTION APPLICATION (UPDATED)
 // ============================================================================
-// Complete modular task management system with Firebase integration
-// All features: Authentication, Groups, Tasks, Chat, Admin, Toast notifications
+// Added features:
+// - "Assigned by me" section on dashboard so users can see tasks they've given to others.
+// - Director-only dashboard section to view all remaining tasks across the org.
+// - Optional due date field in create task modal (reads from element 'task-due-date').
+// - "Show group members" feature in group chat (button id 'show-members-btn') to list who is present.
+// - DataStore helper getTasksAssignedBy and related UI updates.
+// - Task cards now display due dates where available.
 // No mentions page, strict role enforcement, always-visible buttons, centered modals
+// ============================================================================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
@@ -290,6 +296,11 @@ class DataStore {
 
   getUserTasks(userId) {
     return this.getAllTasks().filter(t => t.assignedTo === userId);
+  }
+
+  // New helper: tasks assigned by a user
+  getTasksAssignedBy(userId) {
+    return this.getAllTasks().filter(t => t.assignedBy === userId);
   }
 
   getActiveTasks(userId) {
@@ -738,17 +749,115 @@ class UIRenderer {
     }
   }
 
+  // New: Render tasks assigned by the current user ("Assigned by me")
+  renderAssignedByMe() {
+    const container = Utils.$('assigned-by-me-col');
+    if (!container) return;
+
+    Utils.clearElement(container);
+
+    const user = this.authManager.getCurrentUser();
+    if (!user) {
+      container.innerHTML = '<p class="muted">Login to see tasks you assigned.</p>';
+      return;
+    }
+
+    const assignedTasks = this.dataStore.getTasksAssignedBy(user.id)
+      .filter(t => (t.assignedTo && t.assignedTo !== user.id));
+
+    if (assignedTasks.length === 0) {
+      container.innerHTML = '<p class="muted">No tasks assigned by you.</p>';
+      return;
+    }
+
+    const header = document.createElement('div');
+    header.className = 'card';
+    header.innerHTML = '<strong>Tasks you assigned</strong>';
+    container.appendChild(header);
+
+    assignedTasks.forEach(task => {
+      const card = this.createAssignedByMeCard(task);
+      container.appendChild(card);
+    });
+  }
+
+  createAssignedByMeCard(task) {
+    const card = document.createElement('div');
+    card.className = 'card';
+
+    const assignee = task.assignedTo ? (this.dataStore.getUser(task.assignedTo)?.username || task.assignedTo) : 'Unassigned';
+    const status = task.status || 'in-progress';
+    const dueText = task.dueDate ? ` • due ${Utils.formatDateShort(task.dueDate)}` : '';
+
+    card.innerHTML = `
+      <div>
+        <strong>${task.title}</strong>
+        <div class="muted">To: ${assignee} • ${status}${dueText}</div>
+      </div>
+      <div style="margin-top:8px">${task.description || ''}</div>
+      <div style="margin-top:8px;display:flex;gap:8px">
+        <button class="btn btn--outline btn--small" data-action="message">Message</button>
+        ${this.authManager.isDirector() || this.authManager.getCurrentUser().id === task.assignedBy ? 
+          '<button class="btn btn--danger btn--small" data-action="revoke">Revoke</button>' : ''}
+      </div>
+    `;
+
+    Utils.addButtonListeners(card, {
+      '[data-action="message"]': () => {
+        // Open DM or send notification message to remind
+        if (!task.assignedTo) {
+          Utils.showToast('Task has no assignee to message', 'warning');
+          return;
+        }
+        // create a quick reminder message in messages collection (groupId may be null)
+        (async () => {
+          try {
+            await window.app.firebase.addDoc('messages', {
+              groupId: null,
+              userId: this.authManager.getCurrentUser().id,
+              content: `Reminder: Please update on task "${task.title}"`,
+              type: 'reminder',
+              parentMessageId: null,
+              taskId: task.id,
+              timestamp: new Date().toISOString(),
+              mentions: [task.assignedTo]
+            });
+            Utils.showToast('Reminder sent', 'success');
+          } catch (err) {
+            console.error('Failed to send reminder', err);
+            Utils.showToast('Failed to send reminder', 'error');
+          }
+        })();
+      },
+      '[data-action="revoke"]': () => {
+        if (!confirm('Revoke assignment and unassign this task?')) return;
+        (async () => {
+          try {
+            await window.app.firebase.updateDoc('tasks', task.id, { assignedTo: null });
+            Utils.showToast('Task unassigned', 'success');
+          } catch (err) {
+            console.error('Failed to unassign task', err);
+            Utils.showToast('Failed to unassign task', 'error');
+          }
+        })();
+      }
+    });
+
+    return card;
+  }
+
   createActiveTaskCard(task) {
     const card = document.createElement('div');
     card.className = 'card';
 
     const group = task.groupId ? this.dataStore.getGroup(task.groupId) : null;
     const groupText = group ? `Group: ${group.name}` : 'Personal';
+    const dueText = task.dueDate ? ` • due ${Utils.formatDateShort(task.dueDate)}` : '';
 
     card.innerHTML = `
       <div>
         <strong>${task.title}</strong>
-        <div class="muted">${task.priority || 'medium'} • ${groupText}</div>
+        <div class="muted">${task.priority || 'medium'} • ${groupText}${dueText}</div>
       </div>
       <div style="margin-top:8px">${task.description || ''}</div>
       <div style="margin-top:8px">
@@ -767,10 +876,12 @@ class UIRenderer {
     const card = document.createElement('div');
     card.className = 'card';
 
+    const dueText = task.dueDate ? ` • due ${Utils.formatDateShort(task.dueDate)}` : '';
+
     card.innerHTML = `
       <div>
         <strong>${task.title}</strong>
-        <div class="muted">Completed: ${Utils.formatDate(task.completedAt)}</div>
+        <div class="muted">Completed: ${Utils.formatDate(task.completedAt)}${dueText}</div>
       </div>
       <div style="margin-top:8px">${task.description || ''}</div>
       <div style="margin-top:8px">
@@ -988,6 +1099,50 @@ class UIRenderer {
 
     return card;
   }
+
+  // Director view: show all remaining tasks (not completed & not archived)
+  renderDirectorTasks() {
+    const container = Utils.$('director-tasks-list');
+    if (!container) return;
+
+    Utils.clearElement(container);
+
+    if (!this.authManager.isDirector()) {
+      container.innerHTML = '<p class="muted">Only director can access this view.</p>';
+      return;
+    }
+
+    const remaining = this.dataStore.getAllTasks().filter(t => !t.archived && t.status !== 'completed');
+
+    if (remaining.length === 0) {
+      container.innerHTML = '<p class="muted">No remaining tasks organization-wide.</p>';
+      return;
+    }
+
+    const header = document.createElement('div');
+    header.className = 'card';
+    header.innerHTML = `<strong>Director - Remaining Tasks (${remaining.length})</strong>`;
+    container.appendChild(header);
+
+    remaining.forEach(task => {
+      const card = document.createElement('div');
+      card.className = 'card';
+
+      const assignedByName = this.dataStore.getUser(task.assignedBy)?.username || task.assignedBy || 'Unknown';
+      const assignee = task.assignedTo ? (this.dataStore.getUser(task.assignedTo)?.username || task.assignedTo) : 'Unassigned';
+      const dueText = task.dueDate ? ` • due ${Utils.formatDateShort(task.dueDate)}` : '';
+
+      card.innerHTML = `
+        <div>
+          <strong>${task.title}</strong>
+          <div class="muted">Assigned by: ${assignedByName} • To: ${assignee}${dueText}</div>
+        </div>
+        <div style="margin-top:8px">${task.description || ''}</div>
+      `;
+
+      container.appendChild(card);
+    });
+  }
 }
 
 // ============================================================================
@@ -1167,6 +1322,7 @@ class ModalManager {
     const modal = Utils.$('modal-create-task');
     const assignToSelect = Utils.$('task-assign-to');
     const groupSelect = Utils.$('task-group');
+    const dueDateInput = Utils.$('task-due-date'); // optional new element
     
     // Clear form
     const titleInput = Utils.$('task-title');
@@ -1176,6 +1332,7 @@ class ModalManager {
     if (titleInput) titleInput.value = '';
     if (descInput) descInput.value = '';
     if (privateCheckbox) privateCheckbox.checked = false;
+    if (dueDateInput) dueDateInput.value = ''; // clear due date
 
     // Populate assign to dropdown
     if (assignToSelect) {
@@ -1198,7 +1355,8 @@ class ModalManager {
       noGroupOption.textContent = '(no group - personal)';
       groupSelect.appendChild(noGroupOption);
 
-      const userGroups = this.dataStore.getUserGroups(this.authManager.getCurrentUser().id);
+      const currentUser = this.authManager.getCurrentUser();
+      const userGroups = currentUser ? this.dataStore.getUserGroups(currentUser.id) : [];
       userGroups.forEach(group => {
         const option = document.createElement('option');
         option.value = group.id;
@@ -1216,6 +1374,7 @@ class ModalManager {
     const assignToSelect = Utils.$('task-assign-to');
     const groupSelect = Utils.$('task-group');
     const privateCheckbox = Utils.$('task-private');
+    const dueDateInput = Utils.$('task-due-date'); // optional
     const modal = Utils.$('modal-create-task');
 
     const title = titleInput?.value.trim();
@@ -1223,6 +1382,8 @@ class ModalManager {
     const assignedTo = assignToSelect?.value;
     const groupId = groupSelect?.value || null;
     const isPrivate = privateCheckbox?.checked;
+    const dueDateRaw = dueDateInput?.value?.trim();
+    const dueDate = dueDateRaw ? new Date(dueDateRaw).toISOString() : null;
 
     if (!title || !assignedTo) {
       Utils.showToast('Please fill in all required fields', 'error');
@@ -1237,7 +1398,7 @@ class ModalManager {
         assignedTo,
         status: 'in-progress',
         priority: 'medium',
-        dueDate: null,
+        dueDate: dueDate,
         groupId: isPrivate ? null : groupId,
         private: !!isPrivate,
         archived: false,
@@ -1248,10 +1409,12 @@ class ModalManager {
 
       // Create notification message
       if (!isPrivate && groupId) {
+        let content = `Task assigned: ${title}`;
+        if (dueDate) content += ` (due ${Utils.formatDateShort(dueDate)})`;
         await this.firebase.addDoc('messages', {
           groupId,
           userId: this.authManager.getCurrentUser().id,
-          content: `Task assigned: ${title}`,
+          content,
           type: 'task-assignment',
           parentMessageId: null,
           taskId: taskRef.id,
@@ -1259,10 +1422,12 @@ class ModalManager {
         });
       } else {
         const assignedUser = this.dataStore.getUser(assignedTo);
+        let content = `Private task for ${assignedUser?.username || assignedTo}: ${title}`;
+        if (dueDate) content += ` (due ${Utils.formatDateShort(dueDate)})`;
         await this.firebase.addDoc('messages', {
           groupId: null,
           userId: this.authManager.getCurrentUser().id,
-          content: `Private task for ${assignedUser?.username || assignedTo}: ${title}`,
+          content,
           type: 'private-task',
           parentMessageId: null,
           taskId: taskRef.id,
@@ -1402,6 +1567,12 @@ class TaskFlowApp {
     if (showArchivedBtn) {
       showArchivedBtn.addEventListener('click', () => this.showArchivedTasks());
     }
+
+    // Show members button in chat to list who's present
+    const showMembersBtn = Utils.$('show-members-btn');
+    if (showMembersBtn) {
+      showMembersBtn.addEventListener('click', () => this.showGroupMembers());
+    }
   }
 
   initializeApp() {
@@ -1431,6 +1602,7 @@ class TaskFlowApp {
       case 'dashboard':
         this.uiRenderer.renderDashboardGroups();
         this.uiRenderer.renderDashboardTasks();
+        this.uiRenderer.renderAssignedByMe(); // NEW: show tasks assigned by me
         break;
       case 'groups':
         this.uiRenderer.renderGroupsList();
@@ -1438,6 +1610,10 @@ class TaskFlowApp {
       case 'admin':
         this.uiRenderer.renderPendingUsers();
         this.uiRenderer.renderUserManagement();
+        // Director-only extra view
+        if (this.authManager.isDirector()) {
+          this.uiRenderer.renderDirectorTasks();
+        }
         break;
       case 'profile':
         this.uiRenderer.renderProfile();
@@ -1501,6 +1677,7 @@ class TaskFlowApp {
       this.uiRenderer.renderPendingUsers();
       this.uiRenderer.renderUserManagement();
       this.uiRenderer.renderProfile();
+      this.uiRenderer.renderAssignedByMe(); // user list changed might affect assigned-by display
     }
     
     if (dataType === 'groups') {
@@ -1524,6 +1701,10 @@ class TaskFlowApp {
     
     if (dataType === 'tasks') {
       this.uiRenderer.renderDashboardTasks();
+      this.uiRenderer.renderAssignedByMe();
+      if (this.authManager.isDirector()) {
+        this.uiRenderer.renderDirectorTasks();
+      }
     }
     
     if (dataType === 'messages') {
@@ -1901,6 +2082,25 @@ class TaskFlowApp {
       console.error('Auto-archive failed:', error);
     }
   }
+
+  // New: show group members list (simple presence listing)
+  showGroupMembers() {
+    if (!this.currentGroup) {
+      Utils.showToast('Open a group first', 'error');
+      return;
+    }
+
+    const memberNames = (this.currentGroup.members || [])
+      .map(id => this.dataStore.getUser(id)?.username || id);
+
+    if (memberNames.length === 0) {
+      Utils.showToast('No members in this group', 'info');
+      return;
+    }
+
+    // Show a simple alert listing members (can be replaced by a modal if desired)
+    alert(`Members in ${this.currentGroup.name}:\n\n` + memberNames.join('\n'));
+  }
 }
 
 // ============================================================================
@@ -1934,7 +2134,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   };
   
-  console.log('TaskFlow initialized successfully');
+  console.log('TaskFlow initialized successfully (updated features active)');
 });
 
 // ============================================================================
