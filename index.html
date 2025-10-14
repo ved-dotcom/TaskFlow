@@ -67,6 +67,11 @@
           </div>
 
           <div class="col col-right">
+            <h3>Tasks you assigned</h3>
+            <div id="assigned-by-me-col" class="stack"></div>
+          </div>
+
+          <div class="col col-far-right">
             <h3>Mentions</h3>
             <div id="mentions-col" class="stack"></div>
             <div style="margin-top:12px;display:flex;gap:8px">
@@ -93,6 +98,7 @@
             <div id="chat-members-count" class="muted">0 members</div>
           </div>
           <div>
+            <button id="show-members-btn" class="btn btn--outline">Show members</button>
             <button id="back-to-groups" class="btn btn--outline">Back</button>
           </div>
         </div>
@@ -117,6 +123,10 @@
           <div>
             <h3>Manage Users</h3>
             <div id="user-list" class="list"></div>
+          </div>
+          <div>
+            <h3>Director - Remaining Tasks</h3>
+            <div id="director-tasks-list" class="list"></div>
           </div>
         </div>
       </section>
@@ -175,6 +185,9 @@
       </label>
       <label>Group
         <select id="task-group"></select>
+      </label>
+      <label>Due date
+        <input id="task-due-date" type="date" />
       </label>
       <label style="display:flex;gap:8px;align-items:center">
         <input id="task-private" type="checkbox" /> Private (not attached to group)
