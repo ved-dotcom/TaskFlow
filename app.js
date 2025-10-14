@@ -1,5 +1,9 @@
-// app.js — Resilient TaskFlow frontend (vanilla JS + Firestore)
-// Paste/overwrite this as app.js in your repo.
+// ============================================================================
+// TASKFLOW - COMPLETE PRODUCTION APPLICATION
+// ============================================================================
+// Complete modular task management system with Firebase integration
+// All features: Authentication, Groups, Tasks, Chat, Admin, Toast notifications
+// No mentions page, strict role enforcement, always-visible buttons, centered modals
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
@@ -7,791 +11,1932 @@ import {
   onSnapshot, query, where
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
-/* ---------- FIREBASE CONFIG ---------- */
-const firebaseConfig = {
-  apiKey: "AIzaSyCt3MkuMExKqg8J3BRm60Sf5RZWJZUjrpQ",
-  authDomain: "taskflow-22167.firebaseapp.com",
-  projectId: "taskflow-22167",
-  storageBucket: "taskflow-22167.firebasestorage.app",
-  messagingSenderId: "485747269063",
-  appId: "1:485747269063:web:1924481b201b0f1d804de2",
-  measurementId: "G-D2HQ4YVXL9"
+// ============================================================================
+// CONFIGURATION
+// ============================================================================
+const CONFIG = {
+  firebase: {
+    apiKey: "AIzaSyCt3MkuMExKqg8J3BRm60Sf5RZWJZUjrpQ",
+    authDomain: "taskflow-22167.firebaseapp.com",
+    projectId: "taskflow-22167",
+    storageBucket: "taskflow-22167.firebasestorage.app",
+    messagingSenderId: "485747269063",
+    appId: "1:485747269063:web:1924481b201b0f1d804de2",
+    measurementId: "G-D2HQ4YVXL9"
+  },
+  autoArchive: {
+    interval: 6 * 60 * 60 * 1000, // 6 hours
+    daysOld: 7
+  }
 };
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
 
-/* ---------- Safe DOM helpers ---------- */
-const $id = (id) => document.getElementById(id) || null;
-const has = (el) => !!el;
-
-/* ---------- DOM references (may be null depending on HTML) ---------- */
-const loginView = $id('login-view');
-const appView = $id('app-view');
-
-const loginUsername = $id('login-username');
-const loginPassword = $id('login-password');
-const loginBtn = $id('login-btn');
-const registerBtn = $id('register-btn');
-const logoutBtn = $id('logout-btn');
-
-const navDashboard = $id('nav-dashboard');
-const navGroups = $id('nav-groups');
-const navAdmin = $id('nav-admin');
-const navProfile = $id('nav-profile');
-
-const dashboardView = $id('dashboard-view');
-const groupsView = $id('groups-view');
-const groupChatView = $id('group-chat-view');
-const adminView = $id('admin-view');
-const profileView = $id('profile-view');
-
-const groupsCol = $id('groups-col');
-const tasksCol = $id('tasks-col');
-const mentionsCol = $id('mentions-col');
-
-const groupsList = $id('groups-list');
-const createGroupBtn = $id('create-group-btn');
-
-const chatMessages = $id('chat-messages');
-const chatInput = $id('chat-input');
-const mentionSelect = $id('mention-select');
-const sendMsgBtn = $id('send-msg');
-const backToGroups = $id('back-to-groups');
-const chatGroupName = $id('chat-group-name');
-const chatMembersCount = $id('chat-members-count');
-
-const pendingList = $id('pending-list');
-const userManagement = $id('user-management');
-
-const profileUsername = $id('profile-username');
-const profileRole = $id('profile-role');
-
-const modalCreateGroup = $id('modal-create-group');
-const groupNameInput = $id('group-name');
-const membersCheckboxes = $id('members-checkboxes');
-const adminsCheckboxes = $id('admins-checkboxes');
-const createGroupConfirm = $id('create-group-confirm');
-const createGroupCancel = $id('create-group-cancel');
-
-const modalCreateTask = $id('modal-create-task');
-const taskTitle = $id('task-title');
-const taskDesc = $id('task-desc');
-const taskAssignTo = $id('task-assign-to');
-const taskGroup = $id('task-group');
-const taskPrivate = $id('task-private');
-const createTaskConfirm = $id('create-task-confirm');
-const createTaskCancel = $id('create-task-cancel');
-
-const newDmBtn = $id('new-dm-btn');
-const modalCreateDM = $id('modal-create-dm');
-const dmUserSelect = $id('dm-user-select');
-const createDMConfirm = $id('create-dm-confirm');
-const createDMCancel = $id('create-dm-cancel');
-
-const modalReply = $id('modal-reply');
-const replyToMessageContent = $id('reply-to-message-content');
-const replyForm = $id('reply-form');
-const replyInput = $id('reply-input');
-const replyCancel = $id('cancel-reply-btn');
-
-const showCompletedBtn = $id('show-completed');
-const showArchivedBtn = $id('show-archived');
-
-const refreshBtn = $id('refresh-btn');
-
-/* ---------- App state ---------- */
-let currentUser = null;
-let currentGroup = null;
-let replyTarget = null;
-const users = {}, groups = {}, tasks = {}, messages = {};
-let unsub = { users: null, groups: null, tasks: null, messages: null };
-
-/* ---------- Small helpers ---------- */
-const isAdminOrDirector = () => currentUser && (currentUser.role === 'admin' || currentUser.role === 'director');
-const isDirector = () => currentUser && currentUser.role === 'director';
-
-function uid(prefix = 'id') {
-  return prefix + '_' + Math.random().toString(36).substr(2, 9);
-}
-
-function safeSetText(el, text) {
-  if (!el) return;
-  el.textContent = text;
-}
-
-/* ---------- View switching ---------- */
-function clearViews() {
-  [dashboardView, groupsView, groupChatView, adminView, profileView].forEach(v => v && v.classList && v.classList.remove('active'));
-}
-function showView(view) {
-  clearViews();
-  if (view === 'login') {
-    if (loginView) loginView.classList.add('active');
-    if (appView) appView.classList.remove('active');
-  } else {
-    if (appView) appView.classList.add('active');
-    if (loginView) loginView.classList.remove('active');
-    if (view === 'dashboard' && dashboardView) dashboardView.classList.add('active');
-    if (view === 'groups' && groupsView) groupsView.classList.add('active');
-    if (view === 'groupChat' && groupChatView) groupChatView.classList.add('active');
-    if (view === 'admin' && adminView) adminView.classList.add('active');
-    if (view === 'profile' && profileView) profileView.classList.add('active');
+// ============================================================================
+// UTILITIES MODULE WITH TOAST NOTIFICATIONS
+// ============================================================================
+class Utils {
+  static $(id) {
+    return document.getElementById(id) || null;
   }
 
-  if (navAdmin) {
-    if (isAdminOrDirector()) navAdmin.classList.remove('hidden');
-    else navAdmin.classList.add('hidden');
+  static safeText(element, text) {
+    if (element) element.textContent = text ?? '';
   }
-  if (createGroupBtn) createGroupBtn.classList.toggle('hidden', !isAdminOrDirector());
-}
 
-/* ---------- Firestore real-time listeners ---------- */
-function startListeners() {
-  if (unsub.users) return; // already listening
-  try {
-    unsub.users = onSnapshot(collection(db, 'users'), snap => {
-      snap.forEach(d => users[d.id] = { id: d.id, ...d.data() });
-      renderPendingUsers();
-      renderUserManagement();
-      renderProfile();
-    });
-    unsub.groups = onSnapshot(collection(db, 'groups'), snap => {
-      snap.forEach(d => groups[d.id] = { id: d.id, ...d.data() });
-      renderGroupsList();
-      renderDashboardGroups();
-      if (currentGroup && groups[currentGroup.id]) {
-        currentGroup = { id: currentGroup.id, ...groups[currentGroup.id] };
-        safeSetText(chatGroupName, currentGroup.name || '');
-        if (chatMembersCount) chatMembersCount.textContent = `${(currentGroup.members || []).length} members`;
-        populateMentionSelect();
-      }
-    });
-    unsub.tasks = onSnapshot(collection(db, 'tasks'), snap => {
-      snap.forEach(d => tasks[d.id] = { id: d.id, ...d.data() });
-      renderDashboardTasks();
-    });
-    unsub.messages = onSnapshot(collection(db, 'messages'), snap => {
-      snap.forEach(d => messages[d.id] = { id: d.id, ...d.data() });
-      if (currentGroup) renderChat(currentGroup.id);
-      renderMentionsColumn();
-    });
-  } catch (e) {
-    console.warn('startListeners error', e);
+  static exists(element) {
+    return !!element;
   }
-}
 
-/* ---------- Auto-archive old completed tasks (background) ---------- */
-async function autoArchiveOldTasks() {
-  try {
-    const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
-    const q = await getDocs(collection(db, 'tasks'));
-    for (const d of q.docs) {
-      const t = d.data();
-      if (t.status === 'completed' && !t.archived && t.completedAt) {
-        const ts = new Date(t.completedAt).getTime();
-        if (ts < sevenDaysAgo) {
-          await updateDoc(doc(db, 'tasks', d.id), { archived: true });
+  static uid(prefix = 'id') {
+    return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  static formatDate(dateString) {
+    return dateString ? new Date(dateString).toLocaleString() : '';
+  }
+
+  static formatDateShort(dateString) {
+    return dateString ? new Date(dateString).toLocaleDateString() : '';
+  }
+
+  static showElement(element) {
+    if (element) element.classList.remove('hidden');
+  }
+
+  static hideElement(element) {
+    if (element) element.classList.add('hidden');
+  }
+
+  static toggleElement(element, show) {
+    if (!element) return;
+    element.classList.toggle('hidden', !show);
+  }
+
+  static clearElement(element) {
+    if (element) element.innerHTML = '';
+  }
+
+  static addButtonListeners(element, selectors) {
+    if (!element) return;
+    Object.entries(selectors).forEach(([selector, handler]) => {
+      const btn = element.querySelector(selector);
+      if (btn) btn.addEventListener('click', handler);
+    });
+  }
+
+  // Toast notification system
+  static initToastContainer() {
+    if (!document.getElementById('toast-container')) {
+      const container = document.createElement('div');
+      container.id = 'toast-container';
+      container.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 99999;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        pointer-events: none;
+      `;
+      document.body.appendChild(container);
+    }
+  }
+
+  static showToast(message, type = 'info', duration = 4000) {
+    Utils.initToastContainer();
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.textContent = message;
+    
+    const colors = {
+      error: '#ef4444',
+      success: '#10b981',
+      warning: '#f59e0b',
+      info: '#334155'
+    };
+
+    toast.style.cssText = `
+      background-color: ${colors[type] || colors.info};
+      color: white;
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+      opacity: 0;
+      transform: translateX(100%);
+      transition: all 0.3s ease;
+      pointer-events: auto;
+      max-width: 300px;
+      word-wrap: break-word;
+    `;
+
+    container.appendChild(toast);
+
+    // Animate in
+    setTimeout(() => {
+      toast.style.opacity = '1';
+      toast.style.transform = 'translateX(0)';
+    }, 10);
+
+    // Animate out and remove
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateX(100%)';
+      setTimeout(() => {
+        if (container.contains(toast)) {
+          container.removeChild(toast);
         }
-      }
+      }, 300);
+    }, duration);
+  }
+}
+
+// ============================================================================
+// FIREBASE SERVICE
+// ============================================================================
+class FirebaseService {
+  constructor() {
+    this.app = initializeApp(CONFIG.firebase);
+    this.db = getFirestore(this.app);
+    this.listeners = new Map();
+  }
+
+  // Collection references
+  users() { return collection(this.db, 'users'); }
+  groups() { return collection(this.db, 'groups'); }
+  tasks() { return collection(this.db, 'tasks'); }
+  messages() { return collection(this.db, 'messages'); }
+
+  // Document operations
+  async getDoc(collectionName, id) {
+    return await getDoc(doc(this.db, collectionName, id));
+  }
+
+  async addDoc(collectionName, data) {
+    return await addDoc(collection(this.db, collectionName), data);
+  }
+
+  async updateDoc(collectionName, id, data) {
+    return await updateDoc(doc(this.db, collectionName, id), data);
+  }
+
+  async deleteDoc(collectionName, id) {
+    return await deleteDoc(doc(this.db, collectionName, id));
+  }
+
+  async getDocs(collectionName, queryConstraints = []) {
+    const ref = queryConstraints.length > 0 
+      ? query(collection(this.db, collectionName), ...queryConstraints)
+      : collection(this.db, collectionName);
+    return await getDocs(ref);
+  }
+
+  // Real-time listeners
+  addListener(name, collectionName, callback, queryConstraints = []) {
+    if (this.listeners.has(name)) {
+      this.removeListener(name);
     }
-  } catch (e) {
-    console.error('autoArchive failed', e);
+    
+    const ref = queryConstraints.length > 0 
+      ? query(collection(this.db, collectionName), ...queryConstraints)
+      : collection(this.db, collectionName);
+    
+    const unsubscribe = onSnapshot(ref, callback);
+    this.listeners.set(name, unsubscribe);
+    return unsubscribe;
   }
-}
 
-/* ---------- Render helpers ---------- */
-function renderProfile() {
-  if (!currentUser) return;
-  if (profileUsername) profileUsername.textContent = currentUser.username || '';
-  if (profileRole) profileRole.textContent = currentUser.role || '';
-}
-
-/* Dashboard: Groups column */
-function renderDashboardGroups() {
-  if (!groupsCol) return;
-  groupsCol.innerHTML = '';
-  if (!currentUser) {
-    groupsCol.innerHTML = '<p class="muted">Login to see groups.</p>';
-    return;
-  }
-  const myGroups = Object.values(groups).filter(g => (g.members || []).includes(currentUser.id));
-  if (myGroups.length === 0) {
-    groupsCol.innerHTML = '<p class="muted">No groups.</p>';
-    return;
-  }
-  myGroups.forEach(g => {
-    const el = document.createElement('div');
-    el.className = 'card';
-    const adminsNames = (g.admins || []).map(a => users[a]?.username || a).join(', ');
-    el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center">
-      <div><strong>${g.name}</strong><div class="muted">Admins: ${adminsNames}</div></div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <button class="btn btn--outline small" data-open="${g.id}">Open</button>
-        ${(isDirector() ? `<button class="btn btn--danger small" data-delete="${g.id}">Delete</button>` : '')}
-      </div>
-    </div>`;
-    const openBtn = el.querySelector('[data-open]');
-    if (openBtn) openBtn.onclick = () => openGroup(g.id);
-    const delBtn = el.querySelector('[data-delete]');
-    if (delBtn) delBtn.onclick = async () => {
-      if (!confirm(`Delete group "${g.name}"? This will remove its messages and tasks.`)) return;
-      try {
-        const msgs = await getDocs(query(collection(db, 'messages'), where('groupId', '==', g.id)));
-        for (const m of msgs.docs) await deleteDoc(doc(db, 'messages', m.id));
-        const ts = await getDocs(query(collection(db, 'tasks'), where('groupId', '==', g.id)));
-        for (const t of ts.docs) await deleteDoc(doc(db, 'tasks', t.id));
-        await deleteDoc(doc(db, 'groups', g.id));
-        alert('Group deleted.');
-      } catch (e) {
-        console.error(e);
-        alert('Delete failed.');
-      }
-    };
-    groupsCol.appendChild(el);
-  });
-}
-
-/* Dashboard: Tasks column */
-function renderDashboardTasks() {
-  if (!tasksCol) return;
-  tasksCol.innerHTML = '';
-  if (!currentUser) {
-    tasksCol.innerHTML = '<p class="muted">Login to see tasks.</p>';
-    return;
-  }
-  const myTasks = Object.values(tasks).filter(t => t.assignedTo === currentUser.id);
-  const active = myTasks.filter(t => !t.archived && t.status !== 'completed');
-  const completed = myTasks.filter(t => !t.archived && t.status === 'completed');
-
-  if (active.length === 0) tasksCol.innerHTML = '<p class="muted">No active tasks.</p>';
-  active.forEach(t => {
-    const el = document.createElement('div'); el.className = 'card';
-    el.innerHTML = `<div><strong>${t.title}</strong><div class="muted">${t.priority||'medium'} • ${t.groupId ? ('Group: ' + (groups[t.groupId]?.name || t.groupId)) : 'Personal'}</div></div>
-      <div style="margin-top:8px">${t.description||''}</div>`;
-    const actions = document.createElement('div'); actions.style.marginTop = '8px';
-    const mark = document.createElement('button'); mark.className = 'btn btn--primary small'; mark.textContent = 'Mark Completed';
-    mark.onclick = async () => {
-      try {
-        await updateDoc(doc(db, 'tasks', t.id), { status: 'completed', completedAt: new Date().toISOString() });
-        alert('Task marked completed.');
-      } catch (e) {
-        console.error(e);
-        alert('Failed to mark completed.');
-      }
-    };
-    actions.appendChild(mark);
-    el.appendChild(actions);
-    tasksCol.appendChild(el);
-  });
-
-  if (completed.length) {
-    const hdr = document.createElement('div'); hdr.className = 'card'; hdr.innerHTML = '<strong>Recently Completed</strong>';
-    tasksCol.appendChild(hdr);
-    completed.forEach(t => {
-      const el = document.createElement('div'); el.className = 'card';
-      el.innerHTML = `<div><strong>${t.title}</strong><div class="muted">Completed: ${t.completedAt ? new Date(t.completedAt).toLocaleString() : ''}</div></div>
-        <div style="margin-top:8px">${t.description||''}</div>`;
-      const actions = document.createElement('div'); actions.style.marginTop = '8px';
-      const undo = document.createElement('button'); undo.className = 'btn btn--outline small'; undo.textContent = 'Undo';
-      undo.onclick = async () => {
-        try {
-          await updateDoc(doc(db, 'tasks', t.id), { status: 'in-progress', completedAt: null });
-          alert('Task restored.');
-        } catch (e) { alert('Failed to restore.'); }
-      };
-      actions.appendChild(undo);
-      if (isAdminOrDirector()) {
-        const del = document.createElement('button'); del.className = 'btn btn--danger small'; del.textContent = 'Delete';
-        del.onclick = async () => {
-          if (!confirm('Delete permanently?')) return;
-          try { await deleteDoc(doc(db, 'tasks', t.id)); alert('Deleted'); } catch(e){ alert('Delete failed'); }
-        };
-        actions.appendChild(del);
-      }
-      el.appendChild(actions);
-      tasksCol.appendChild(el);
-    });
-  }
-}
-
-/* Mentions column */
-function renderMentionsColumn() {
-  if (!mentionsCol) return;
-  mentionsCol.innerHTML = '';
-  if (!currentUser) {
-    mentionsCol.innerHTML = '<p class="muted">Login to see mentions.</p>';
-    return;
-  }
-  const m = Object.values(messages).filter(msg => Array.isArray(msg.mentions) && msg.mentions.includes(currentUser.id));
-  if (m.length === 0) {
-    mentionsCol.innerHTML = '<p class="muted">No mentions.</p>';
-    return;
-  }
-  m.sort((a, b) => new Date(b.timestamp||0) - new Date(a.timestamp||0));
-  m.forEach(msg => {
-    const el = document.createElement('div'); el.className = 'card';
-    const from = users[msg.userId]?.username || msg.userId;
-    el.innerHTML = `<div><strong>${from}</strong><div class="muted">${msg.groupId ? ('in ' + (groups[msg.groupId]?.name || msg.groupId)) : 'Direct'}</div></div>
-      <div style="margin-top:8px">${msg.content}</div>
-      <div class="muted" style="margin-top:6px">${new Date(msg.timestamp||'').toLocaleString()}</div>`;
-    mentionsCol.appendChild(el);
-  });
-}
-
-/* Groups list (detailed) */
-function renderGroupsList() {
-  if (!groupsList) return;
-  groupsList.innerHTML = '';
-  if (!currentUser) {
-    groupsList.innerHTML = '<p class="muted">Login to see groups.</p>';
-    return;
-  }
-  const my = Object.values(groups).filter(g => (g.members || []).includes(currentUser.id));
-  if (my.length === 0) { groupsList.innerHTML = '<p class="muted">No groups.</p>'; return; }
-  my.forEach(g => {
-    const el = document.createElement('div'); el.className = 'card';
-    el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center">
-      <div><strong>${g.name}</strong><div class="muted">Members: ${(g.members||[]).map(id => users[id]?.username || id).join(', ')}</div></div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <button class="btn btn--outline small" data-open="${g.id}">Open</button>
-        ${(isAdminOrDirector() && (g.admins||[]).includes(currentUser.id) ? `<button class="btn btn--danger small" data-delete="${g.id}">Delete</button>` : '')}
-      </div>
-    </div>`;
-    const openBtn = el.querySelector('[data-open]');
-    if (openBtn) openBtn.onclick = () => openGroup(g.id);
-    const delBtn = el.querySelector('[data-delete]');
-    if (delBtn) delBtn.onclick = async () => {
-      if (!confirm(`Delete group "${g.name}"? This will remove messages & tasks.`)) return;
-      try {
-        const msgs = await getDocs(query(collection(db, 'messages'), where('groupId', '==', g.id)));
-        for (const m of msgs.docs) await deleteDoc(doc(db, 'messages', m.id));
-        const ts = await getDocs(query(collection(db, 'tasks'), where('groupId', '==', g.id)));
-        for (const t of ts.docs) await deleteDoc(doc(db, 'tasks', t.id));
-        await deleteDoc(doc(db, 'groups', g.id));
-        alert('Deleted.');
-      } catch (e) { console.error(e); alert('Delete failed'); }
-    };
-    groupsList.appendChild(el);
-  });
-}
-
-/* Mention select population (members only) */
-function populateMentionSelect() {
-  if (!mentionSelect || !currentGroup) return;
-  mentionSelect.innerHTML = '';
-  const list = (currentGroup.members || []).map(id => ({ id, name: users[id]?.username || id }));
-  list.forEach(m => {
-    const opt = document.createElement('option'); opt.value = m.id; opt.textContent = m.name; mentionSelect.appendChild(opt);
-  });
-}
-
-/* Chat rendering (threaded replies) */
-function renderChat(groupId) {
-  if (!chatMessages) return;
-  chatMessages.innerHTML = '';
-  const msgs = Object.values(messages).filter(m => m.groupId === groupId).sort((a, b) => new Date(a.timestamp||0) - new Date(b.timestamp||0));
-  const children = {};
-  msgs.forEach(m => { children[m.id] = children[m.id] || []; });
-  msgs.forEach(m => { if (m.parentMessageId) children[m.parentMessageId] = children[m.parentMessageId] || [], children[m.parentMessageId].push(m); });
-
-  function renderMessage(m, container) {
-    const div = document.createElement('div'); div.className = 'message';
-    const name = users[m.userId]?.username || m.userId;
-    const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = `${name} • ${new Date(m.timestamp||'').toLocaleString()}`;
-    div.appendChild(meta);
-    const content = document.createElement('div'); content.textContent = m.content; div.appendChild(content);
-    if (Array.isArray(m.mentions) && m.mentions.length) {
-      const mm = document.createElement('div'); mm.className = 'muted'; mm.textContent = 'Mentioned: ' + m.mentions.map(id => users[id]?.username || id).join(', ');
-      div.appendChild(mm);
-    }
-    const actions = document.createElement('div'); actions.style.marginTop = '8px'; actions.style.display = 'flex'; actions.style.gap = '8px';
-    const replyBtn = document.createElement('button'); replyBtn.className = 'btn btn--outline small'; replyBtn.textContent = 'Reply';
-    replyBtn.onclick = () => {
-      replyTarget = m;
-      if (replyToMessageContent) replyToMessageContent.textContent = m.content;
-      if (modalReply) modalReply.classList.remove('hidden');
-    };
-    actions.appendChild(replyBtn);
-    div.appendChild(actions);
-    container.appendChild(div);
-
-    const ch = children[m.id] || [];
-    if (ch.length) {
-      const thread = document.createElement('div'); thread.className = 'thread';
-      ch.sort((a,b) => new Date(a.timestamp||0) - new Date(b.timestamp||0));
-      ch.forEach(c => renderMessage(c, thread));
-      container.appendChild(thread);
+  removeListener(name) {
+    const unsubscribe = this.listeners.get(name);
+    if (unsubscribe) {
+      unsubscribe();
+      this.listeners.delete(name);
     }
   }
 
-  msgs.filter(m => !m.parentMessageId).forEach(m => renderMessage(m, chatMessages));
-  chatMessages.scrollTop = chatMessages.scrollHeight;
-}
-
-/* ---------- Admin / Pending / User Management ---------- */
-function renderPendingUsers() {
-  if (!pendingList) return;
-  pendingList.innerHTML = '';
-  if (!isDirector()) {
-    pendingList.innerHTML = '<p class="muted">Only director can see pending approvals.</p>';
-    return;
+  removeAllListeners() {
+    this.listeners.forEach((unsubscribe) => unsubscribe());
+    this.listeners.clear();
   }
-  const pending = Object.values(users).filter(u => u.status === 'pending');
-  if (pending.length === 0) { pendingList.innerHTML = '<p class="muted">No pending users.</p>'; return; }
-  pending.forEach(u => {
-    const el = document.createElement('div'); el.className = 'card';
-    el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center">
-      <div><strong>${u.username}</strong><div class="muted">${u.createdAt ? new Date(u.createdAt).toLocaleDateString() : ''}</div></div>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn--primary small" data-id="${u.id}">Approve</button>
-        <button class="btn btn--danger small" data-id="${u.id}">Remove</button>
-      </div>
-    </div>`;
-    el.querySelector('.btn--primary').onclick = async () => {
-      try { await updateDoc(doc(db, 'users', u.id), { status: 'active' }); alert('Approved'); } catch(e){ alert('Failed'); }
-    };
-    el.querySelector('.btn--danger').onclick = async () => {
-      if (!confirm('Remove user?')) return;
-      try { await deleteDoc(doc(db, 'users', u.id)); alert('Removed'); } catch(e){ alert('Failed'); }
-    };
-    pendingList.appendChild(el);
-  });
 }
 
-function renderUserManagement() {
-  if (!userManagement) return;
-  userManagement.innerHTML = '';
-  if (!isDirector()) { userManagement.innerHTML = '<p class="muted">Only director can manage users.</p>'; return; }
-  const activeUsers = Object.values(users).filter(u => u.status === 'active');
-  if (activeUsers.length === 0) { userManagement.innerHTML = '<p class="muted">No users.</p>'; return; }
-  activeUsers.forEach(u => {
-    const el = document.createElement('div'); el.className = 'card';
-    el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center">
-      <div><strong>${u.username}</strong><div class="muted">Role: ${u.role}</div></div>
-      <div style="display:flex;gap:6px">
-        <button class="btn btn--outline small set-user" data-id="${u.id}">User</button>
-        <button class="btn btn--outline small set-admin" data-id="${u.id}">Admin</button>
-        <button class="btn btn--outline small set-dir" data-id="${u.id}">Director</button>
-        <button class="btn btn--danger small remove-user" data-id="${u.id}">Remove</button>
-      </div>
-    </div>`;
-    el.querySelector('.set-user').onclick = () => changeRole(u.id, 'user');
-    el.querySelector('.set-admin').onclick = () => changeRole(u.id, 'admin');
-    el.querySelector('.set-dir').onclick = () => changeRole(u.id, 'director');
-    el.querySelector('.remove-user').onclick = async () => {
-      if (!confirm('Remove user?')) return;
-      try { await deleteUser(u.id); alert('Removed'); } catch(e){ alert('Failed'); }
-    };
-    userManagement.appendChild(el);
-  });
+// ============================================================================
+// DATA STORE
+// ============================================================================
+class DataStore {
+  constructor() {
+    this.users = new Map();
+    this.groups = new Map();
+    this.tasks = new Map();
+    this.messages = new Map();
+  }
+
+  // Users
+  setUsers(userData) {
+    this.users.clear();
+    userData.forEach(user => this.users.set(user.id, user));
+  }
+
+  getUser(id) {
+    return this.users.get(id);
+  }
+
+  getAllUsers() {
+    return Array.from(this.users.values());
+  }
+
+  getActiveUsers() {
+    return this.getAllUsers().filter(u => u.status === 'active');
+  }
+
+  getPendingUsers() {
+    return this.getAllUsers().filter(u => u.status === 'pending');
+  }
+
+  // Groups
+  setGroups(groupData) {
+    this.groups.clear();
+    groupData.forEach(group => this.groups.set(group.id, group));
+  }
+
+  getGroup(id) {
+    return this.groups.get(id);
+  }
+
+  getAllGroups() {
+    return Array.from(this.groups.values());
+  }
+
+  getUserGroups(userId) {
+    return this.getAllGroups().filter(g => (g.members || []).includes(userId));
+  }
+
+  // Tasks
+  setTasks(taskData) {
+    this.tasks.clear();
+    taskData.forEach(task => this.tasks.set(task.id, task));
+  }
+
+  getTask(id) {
+    return this.tasks.get(id);
+  }
+
+  getAllTasks() {
+    return Array.from(this.tasks.values());
+  }
+
+  getUserTasks(userId) {
+    return this.getAllTasks().filter(t => t.assignedTo === userId);
+  }
+
+  getActiveTasks(userId) {
+    return this.getUserTasks(userId).filter(t => !t.archived && t.status !== 'completed');
+  }
+
+  getCompletedTasks(userId) {
+    return this.getUserTasks(userId).filter(t => !t.archived && t.status === 'completed');
+  }
+
+  // Messages
+  setMessages(messageData) {
+    this.messages.clear();
+    messageData.forEach(message => this.messages.set(message.id, message));
+  }
+
+  getMessage(id) {
+    return this.messages.get(id);
+  }
+
+  getAllMessages() {
+    return Array.from(this.messages.values());
+  }
+
+  getGroupMessages(groupId) {
+    return this.getAllMessages()
+      .filter(m => m.groupId === groupId)
+      .sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+  }
+
+  clear() {
+    this.users.clear();
+    this.groups.clear();
+    this.tasks.clear();
+    this.messages.clear();
+  }
 }
 
-async function changeRole(uid, role) {
-  if (!isDirector()) return alert('Only director');
-  try { await updateDoc(doc(db, 'users', uid), { role }); alert('Role updated'); } catch(e){ alert('Failed'); }
-}
+// ============================================================================
+// AUTHENTICATION MODULE
+// ============================================================================
+class AuthenticationManager {
+  constructor(firebaseService, dataStore) {
+    this.firebase = firebaseService;
+    this.dataStore = dataStore;
+    this.currentUser = null;
+    this.setupEventListeners();
+  }
 
-/* ---------- Actions: login / register / logout ---------- */
-if (loginBtn) {
-  loginBtn.addEventListener('click', async () => {
-    const uname = (loginUsername && loginUsername.value || '').trim();
-    const pass = (loginPassword && loginPassword.value || '').trim();
-    if (!uname || !pass) return alert('Enter username/password');
-    try {
-      const q = query(collection(db, 'users'), where('username', '==', uname));
-      const snap = await getDocs(q);
-      if (snap.empty) return alert('Invalid credentials');
-      let found = null;
-      snap.forEach(d => {
-        const data = d.data();
-        if (data.password === pass) found = { id: d.id, ...d.data() };
+  setupEventListeners() {
+    const loginBtn = Utils.$('login-btn');
+    const registerBtn = Utils.$('show-register');
+    const logoutBtn = Utils.$('logout-btn');
+
+    if (loginBtn) {
+      loginBtn.addEventListener('click', () => this.handleLogin());
+    }
+
+    if (registerBtn) {
+      registerBtn.addEventListener('click', () => this.handleRegister());
+    }
+
+    if (logoutBtn) {
+      logoutBtn.addEventListener('click', () => this.handleLogout());
+    }
+
+    // Enter key for login
+    const loginPassword = Utils.$('login-password');
+    if (loginPassword) {
+      loginPassword.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && loginBtn) loginBtn.click();
       });
-      if (!found) return alert('Invalid credentials');
-      if (found.status !== 'active') return alert('User not active. Wait for approval.');
-      currentUser = found;
-
-      // start listeners and load current data
-      startListeners();
-      const [us, gs, ts, ms] = await Promise.all([
-        getDocs(collection(db, 'users')),
-        getDocs(collection(db, 'groups')),
-        getDocs(collection(db, 'tasks')),
-        getDocs(collection(db, 'messages'))
-      ]);
-      us.forEach(d => users[d.id] = { id: d.id, ...d.data() });
-      gs.forEach(d => groups[d.id] = { id: d.id, ...d.data() });
-      ts.forEach(d => tasks[d.id] = { id: d.id, ...d.data() });
-      ms.forEach(d => messages[d.id] = { id: d.id, ...d.data() });
-
-      // background housekeeping
-      autoArchiveOldTasks();
-
-      // show dashboard
-      showView('dashboard');
-      renderProfile();
-      renderDashboardGroups();
-      renderDashboardTasks();
-      renderMentionsColumn();
-    } catch (e) {
-      console.error(e);
-      alert('Login failed.');
     }
-  });
-}
-
-/* register button optional, if present */
-if (registerBtn) {
-  registerBtn.addEventListener('click', async () => {
-    const name = prompt('Choose a username (no spaces)');
-    if (!name) return;
-    const pass = prompt('Choose a password');
-    if (!pass) return;
-    try {
-      const snap = await getDocs(query(collection(db, 'users'), where('username', '==', name)));
-      if (!snap.empty) return alert('Username taken');
-      await addDoc(collection(db, 'users'), { username: name, password: pass, role: 'user', status: 'pending', groups: [], createdAt: new Date().toISOString() });
-      alert('Registered — wait for director approval.');
-    } catch (e) {
-      console.error(e);
-      alert('Register failed');
-    }
-  });
-}
-
-/* logout */
-if (logoutBtn) {
-  logoutBtn.addEventListener('click', () => {
-    try {
-      Object.values(unsub).forEach(u => { if (u) u(); });
-      unsub = { users: null, groups: null, tasks: null, messages: null };
-    } catch (e) { /* ignore */ }
-    currentUser = null;
-    currentGroup = null;
-    showView('login');
-  });
-}
-
-/* Nav buttons (if present) */
-if (navDashboard) navDashboard.addEventListener('click', () => { showView('dashboard'); renderDashboardGroups(); renderDashboardTasks(); renderMentionsColumn(); });
-if (navGroups) navGroups.addEventListener('click', () => { showView('groups'); renderGroupsList(); });
-if (navAdmin) navAdmin.addEventListener('click', () => { showView('admin'); renderPendingUsers(); renderUserManagement(); });
-if (navProfile) navProfile.addEventListener('click', () => { showView('profile'); renderProfile(); });
-
-/* Create group: show modal, populate members/admins */
-if (createGroupBtn) {
-  createGroupBtn.addEventListener('click', () => {
-    if (!isAdminOrDirector()) return alert('Only admins/directors can create groups.');
-    if (membersCheckboxes) membersCheckboxes.innerHTML = '';
-    if (adminsCheckboxes) adminsCheckboxes.innerHTML = '';
-    Object.values(users).filter(u => u.status === 'active').forEach(u => {
-      if (membersCheckboxes) {
-        const div = document.createElement('div');
-        div.innerHTML = `<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" value="${u.id}" /> <span>${u.username}</span></label>`;
-        membersCheckboxes.appendChild(div);
-      }
-      if (adminsCheckboxes) {
-        const div2 = document.createElement('div');
-        div2.innerHTML = `<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" value="${u.id}" /> <span>${u.username}</span></label>`;
-        adminsCheckboxes.appendChild(div2);
-      }
-    });
-    if (groupNameInput) groupNameInput.value = '';
-    if (modalCreateGroup) modalCreateGroup.classList.remove('hidden');
-  });
-}
-if (createGroupCancel) createGroupCancel.addEventListener('click', () => modalCreateGroup && modalCreateGroup.classList.add('hidden'));
-if (createGroupConfirm) {
-  createGroupConfirm.addEventListener('click', async () => {
-    if (!groupNameInput) return alert('Missing inputs');
-    const name = groupNameInput.value.trim();
-    if (!name) return alert('Group name required');
-    const memberIds = membersCheckboxes ? Array.from(membersCheckboxes.querySelectorAll('input:checked')).map(i => i.value) : [];
-    const adminIds = adminsCheckboxes ? Array.from(adminsCheckboxes.querySelectorAll('input:checked')).map(i => i.value) : [];
-    if (adminIds.length === 0) return alert('Select at least one admin');
-    try {
-      const gRef = await addDoc(collection(db, 'groups'), { name, members: memberIds, admins: adminIds, type: 'team', createdAt: new Date().toISOString() });
-      for (const uid of memberIds) {
-        try {
-          const uref = doc(db, 'users', uid);
-          const ud = await getDoc(uref);
-          if (ud.exists()) {
-            const dat = ud.data();
-            const arr = dat.groups || [];
-            if (!arr.includes(gRef.id)) await updateDoc(uref, { groups: [...arr, gRef.id] });
-          }
-        } catch (e) { console.warn('user update failed', e); }
-      }
-      alert('Group created.');
-      if (modalCreateGroup) modalCreateGroup.classList.add('hidden');
-    } catch (e) {
-      console.error(e);
-      alert('Create group failed.');
-    }
-  });
-}
-
-/* Create task (modal) */
-if (has($id('create-task-btn')) && has(modalCreateTask)) {
-  $id('create-task-btn').addEventListener('click', () => {
-    if (!taskAssignTo) return;
-    taskAssignTo.innerHTML = '';
-    Object.values(users).filter(u => u.status === 'active').forEach(u => {
-      const opt = document.createElement('option'); opt.value = u.id; opt.textContent = u.username; taskAssignTo.appendChild(opt);
-    });
-    taskGroup.innerHTML = '<option value="">(no group - personal)</option>';
-    Object.values(groups).filter(g => (g.members || []).includes(currentUser.id)).forEach(g => {
-      const opt = document.createElement('option'); opt.value = g.id; opt.textContent = g.name; taskGroup.appendChild(opt);
-    });
-    taskTitle.value = ''; taskDesc.value = ''; taskPrivate.checked = false;
-    modalCreateTask.classList.remove('hidden');
-  });
-
-  if (createTaskCancel) createTaskCancel.addEventListener('click', () => modalCreateTask.classList.add('hidden'));
-  if (createTaskConfirm) {
-    createTaskConfirm.addEventListener('click', async () => {
-      const title = taskTitle.value.trim(); const description = taskDesc.value.trim();
-      const assignedTo = taskAssignTo.value; const groupId = taskGroup.value || null;
-      const isPrivate = taskPrivate.checked;
-      if (!title || !assignedTo) return alert('Fill required fields');
-      try {
-        const data = { title, description, assignedBy: currentUser.id, assignedTo, status: 'in-progress', priority: 'medium', dueDate: null, groupId: isPrivate ? null : groupId, private: !!isPrivate, archived: false, createdAt: new Date().toISOString() };
-        const tref = await addDoc(collection(db, 'tasks'), data);
-        if (!isPrivate && groupId) {
-          await addDoc(collection(db, 'messages'), { groupId, userId: currentUser.id, content: `Task assigned: ${title}`, type: 'task-assignment', parentMessageId: null, taskId: tref.id, timestamp: new Date().toISOString() });
-        } else {
-          await addDoc(collection(db, 'messages'), { groupId: null, userId: currentUser.id, content: `Private task assigned to ${users[assignedTo]?.username || assignedTo}: ${title}`, type: 'private-task', parentMessageId: null, taskId: tref.id, timestamp: new Date().toISOString(), mentions: [assignedTo] });
-        }
-        alert('Task created.');
-        modalCreateTask.classList.add('hidden');
-      } catch (e) { console.error(e); alert('Create task failed'); }
-    });
   }
-}
 
-/* Create DM between two users */
-if (newDmBtn) {
-  newDmBtn.addEventListener('click', () => {
-    if (!dmUserSelect) return;
-    dmUserSelect.innerHTML = '';
-    Object.values(users).filter(u => u.status === 'active' && u.id !== currentUser.id).forEach(u => {
-      const opt = document.createElement('option'); opt.value = u.id; opt.textContent = u.username; dmUserSelect.appendChild(opt);
-    });
-    if (modalCreateDM) modalCreateDM.classList.remove('hidden');
-  });
-}
-if (createDMCancel) createDMCancel.addEventListener('click', () => modalCreateDM && modalCreateDM.classList.add('hidden'));
-if (createDMConfirm) createDMConfirm.addEventListener('click', async () => {
-  const other = dmUserSelect && dmUserSelect.value;
-  if (!other) return alert('Select a user');
-  try {
-    const existing = Object.values(groups).find(g => g.type === 'dm' && (g.members || []).includes(currentUser.id) && (g.members || []).includes(other));
-    if (existing) {
-      modalCreateDM && modalCreateDM.classList.add('hidden');
-      openGroup(existing.id);
+  async handleLogin() {
+    const usernameEl = Utils.$('login-username');
+    const passwordEl = Utils.$('login-password');
+    
+    const username = usernameEl?.value.trim();
+    const password = passwordEl?.value.trim();
+
+    if (!username || !password) {
+      Utils.showToast('Please enter username and password', 'error');
       return;
     }
-    const name = `DM: ${users[other]?.username || other}`;
-    const gref = await addDoc(collection(db, 'groups'), { name, members: [currentUser.id, other], admins: [], type: 'dm', createdAt: new Date().toISOString() });
-    modalCreateDM && modalCreateDM.classList.add('hidden');
-    openGroup(gref.id);
-  } catch (e) { console.error(e); alert('Create DM failed'); }
-});
 
-/* Send message & reply */
-if (sendMsgBtn) sendMsgBtn.addEventListener('click', async () => {
-  if (!currentGroup) return alert('Open a group first');
-  const text = chatInput && chatInput.value.trim();
-  if (!text) return;
-  const mentions = mentionSelect ? Array.from(mentionSelect.selectedOptions).map(o => o.value) : [];
-  try {
-    await addDoc(collection(db, 'messages'), { groupId: currentGroup.type === 'dm' ? currentGroup.id : currentGroup.id, userId: currentUser.id, content: text, type: 'message', parentMessageId: null, taskId: null, timestamp: new Date().toISOString(), mentions });
-    if (chatInput) chatInput.value = '';
-    if (mentionSelect) mentionSelect.selectedIndex = -1;
-  } catch (e) { console.error(e); alert('Send failed'); }
-});
-
-if (replyForm) {
-  replyForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const replyContent = replyInput && replyInput.value.trim();
-    if (!replyContent || !replyTarget) return;
     try {
-      await addDoc(collection(db, 'messages'), { groupId: replyTarget.groupId, userId: currentUser.id, content: replyContent, type: 'message', parentMessageId: replyTarget.id, taskId: null, timestamp: new Date().toISOString() });
-      replyInput.value = '';
-      replyTarget = null;
-      modalReply && modalReply.classList.add('hidden');
-    } catch (err) { console.error(err); alert('Reply failed'); }
-  });
-}
-if (replyCancel) replyCancel.addEventListener('click', () => { replyTarget = null; modalReply && modalReply.classList.add('hidden'); });
+      const userDocs = await this.firebase.getDocs('users', [where('username', '==', username)]);
+      
+      if (userDocs.empty) {
+        Utils.showToast('Invalid username or password', 'error');
+        return;
+      }
 
-/* Open group with access control */
-async function openGroup(groupId) {
-  const gData = groups[groupId] || null;
-  let g = null;
-  if (gData) g = gData;
-  else {
-    try { const snap = await getDoc(doc(db, 'groups', groupId)); if (snap.exists()) g = { id: snap.id, ...snap.data() }; } catch (e) { console.error(e); }
+      let foundUser = null;
+      userDocs.forEach(doc => {
+        const userData = doc.data();
+        if (userData.password === password) {
+          foundUser = { id: doc.id, ...userData };
+        }
+      });
+
+      if (!foundUser) {
+        Utils.showToast('Invalid username or password', 'error');
+        return;
+      }
+
+      if (foundUser.status !== 'active') {
+        Utils.showToast('User account is not approved yet', 'error');
+        return;
+      }
+
+      this.currentUser = foundUser;
+      this.onLoginSuccess();
+
+    } catch (error) {
+      console.error('Login failed:', error);
+      Utils.showToast('Login error: ' + (error.message || error), 'error');
+    }
   }
-  if (!g) return alert('Group not found');
-  if (!g.members || !g.members.includes(currentUser.id)) return alert('Access denied — not a member');
-  currentGroup = { id: groupId, ...g };
-  safeSetText(chatGroupName, currentGroup.name || '');
-  if (chatMembersCount) chatMembersCount.textContent = `${(currentGroup.members || []).length} members`;
-  showView('groupChat');
-  populateMentionSelect();
-  renderChat(groupId);
-}
-if (backToGroups) backToGroups.addEventListener('click', () => { currentGroup = null; showView('groups'); });
 
-/* Delete user (director only) */
-async function deleteUser(uid) {
-  if (!isDirector()) return alert('Only director can remove users');
-  if (!confirm('Really delete user and remove from groups/tasks?')) return;
-  try {
-    const groupIds = Object.values(groups).filter(g => (g.members || []).includes(uid)).map(g => g.id);
-    for (const gid of groupIds) {
-      const g = groups[gid];
-      if (g.type === 'dm') {
-        const msgs = await getDocs(query(collection(db, 'messages'), where('groupId', '==', gid)));
-        for (const m of msgs.docs) await deleteDoc(doc(db, 'messages', m.id));
-        await deleteDoc(doc(db, 'groups', gid));
+  async handleRegister() {
+    const username = prompt('Choose a username (no spaces)');
+    if (!username) return;
+
+    const password = prompt('Choose a password');
+    if (!password) return;
+
+    try {
+      const existingUsers = await this.firebase.getDocs('users', [where('username', '==', username)]);
+      
+      if (!existingUsers.empty) {
+        Utils.showToast('Username is already taken', 'error');
+        return;
+      }
+
+      await this.firebase.addDoc('users', {
+        username,
+        password,
+        role: 'user',
+        status: 'pending',
+        groups: [],
+        createdAt: new Date().toISOString()
+      });
+
+      Utils.showToast('Registration successful. Please wait for director approval.', 'success');
+    } catch (error) {
+      console.error('Registration failed:', error);
+      Utils.showToast('Registration failed', 'error');
+    }
+  }
+
+  handleLogout() {
+    try {
+      // Stop Firebase listeners
+      this.firebase.removeAllListeners();
+
+      // Clear data store
+      this.dataStore.clear();
+
+      // Reset current user
+      this.currentUser = null;
+
+      // Update UI
+      this.onLogoutSuccess();
+
+    } catch (error) {
+      console.error('Logout error:', error);
+      Utils.showToast('Logout error', 'error');
+    }
+  }
+
+  onLoginSuccess() {
+    // Hide login, show app
+    Utils.hideElement(Utils.$('login-view'));
+    Utils.showElement(Utils.$('app-view'));
+    Utils.showElement(Utils.$('logout-btn'));
+
+    // Update navigation visibility
+    this.updateNavigationVisibility();
+
+    // Notify other modules
+    window.app.onUserLogin(this.currentUser);
+    Utils.showToast('Logged in successfully', 'success');
+  }
+
+  onLogoutSuccess() {
+    // Show login, hide app
+    Utils.showElement(Utils.$('login-view'));
+    Utils.hideElement(Utils.$('app-view'));
+    Utils.hideElement(Utils.$('logout-btn'));
+
+    // Hide admin features
+    Utils.hideElement(Utils.$('nav-admin'));
+    Utils.hideElement(Utils.$('create-group-btn'));
+
+    // Notify other modules
+    window.app.onUserLogout();
+    Utils.showToast('Logged out successfully', 'success');
+  }
+
+  updateNavigationVisibility() {
+    const isAdminOrDirector = this.isAdminOrDirector();
+    Utils.toggleElement(Utils.$('nav-admin'), isAdminOrDirector);
+    Utils.toggleElement(Utils.$('create-group-btn'), isAdminOrDirector);
+  }
+
+  getCurrentUser() {
+    return this.currentUser;
+  }
+
+  isAdminOrDirector() {
+    return this.currentUser && (this.currentUser.role === 'admin' || this.currentUser.role === 'director');
+  }
+
+  isDirector() {
+    return this.currentUser && this.currentUser.role === 'director';
+  }
+}
+
+// ============================================================================
+// NAVIGATION MODULE
+// ============================================================================
+class NavigationManager {
+  constructor() {
+    this.currentView = 'login';
+    this.viewHistory = [];
+    this.setupEventListeners();
+  }
+
+  setupEventListeners() {
+    const navButtons = {
+      'nav-dashboard': 'dashboard',
+      'nav-groups': 'groups',
+      'nav-admin': 'admin',
+      'nav-profile': 'profile'
+    };
+
+    Object.entries(navButtons).forEach(([buttonId, view]) => {
+      const button = Utils.$(buttonId);
+      if (button) {
+        button.addEventListener('click', () => this.navigateTo(view));
+      }
+    });
+
+    const backBtn = Utils.$('back-btn');
+    if (backBtn) {
+      backBtn.addEventListener('click', () => this.goBack());
+    }
+  }
+
+  navigateTo(view, options = {}) {
+    try {
+      if (options.resetHistory) {
+        this.viewHistory = [];
+      } else if (this.currentView && this.currentView !== view) {
+        this.viewHistory.push(this.currentView);
+      }
+
+      this.showView(view);
+      this.currentView = view;
+
+      // Update back button visibility
+      const backBtn = Utils.$('back-btn');
+      Utils.toggleElement(backBtn, view !== 'dashboard' && view !== 'login');
+
+      // Notify app of view change
+      window.app.onViewChange(view);
+
+    } catch (error) {
+      console.warn('Navigation error:', error);
+    }
+  }
+
+  goBack() {
+    try {
+      if (this.viewHistory.length > 0) {
+        const previousView = this.viewHistory.pop();
+        this.showView(previousView);
+        this.currentView = previousView;
+        
+        const backBtn = Utils.$('back-btn');
+        Utils.toggleElement(backBtn, previousView !== 'dashboard' && previousView !== 'login');
       } else {
-        const m = (g.members || []).filter(x => x !== uid);
-        const a = (g.admins || []).filter(x => x !== uid);
-        await updateDoc(doc(db, 'groups', gid), { members: m, admins: a });
+        this.navigateTo('dashboard', { resetHistory: true });
+      }
+    } catch (error) {
+      console.warn('Back navigation error:', error);
+      this.navigateTo('dashboard', { resetHistory: true });
+    }
+  }
+
+  showView(viewName) {
+    // Hide all views first
+    this.hideAllViews();
+
+    if (viewName === 'login') {
+      Utils.showElement(Utils.$('login-view'));
+      Utils.hideElement(Utils.$('app-view'));
+      Utils.hideElement(Utils.$('back-btn'));
+      return;
+    }
+
+    Utils.hideElement(Utils.$('login-view'));
+    Utils.showElement(Utils.$('app-view'));
+
+    // Show specific view
+    const viewMap = {
+      'dashboard': 'dashboard-view',
+      'groups': 'groups-view',
+      'groupChat': 'group-chat-view',
+      'admin': 'admin-view',
+      'profile': 'profile-view'
+    };
+
+    const viewElementId = viewMap[viewName];
+    if (viewElementId) {
+      const viewElement = Utils.$(viewElementId);
+      if (viewElement) viewElement.classList.add('active');
+    }
+  }
+
+  hideAllViews() {
+    const views = ['dashboard-view', 'groups-view', 'group-chat-view', 'admin-view', 'profile-view'];
+    views.forEach(viewId => {
+      const view = Utils.$(viewId);
+      if (view) view.classList.remove('active');
+    });
+  }
+
+  clearHistory() {
+    this.viewHistory = [];
+    this.currentView = 'login';
+    Utils.hideElement(Utils.$('back-btn'));
+  }
+}
+
+// ============================================================================
+// UI RENDERER MODULE
+// ============================================================================
+class UIRenderer {
+  constructor(dataStore, authManager) {
+    this.dataStore = dataStore;
+    this.authManager = authManager;
+  }
+
+  renderProfile() {
+    const user = this.authManager.getCurrentUser();
+    if (!user) return;
+
+    Utils.safeText(Utils.$('profile-username'), user.username);
+    Utils.safeText(Utils.$('profile-role'), user.role);
+  }
+
+  renderDashboardGroups() {
+    const container = Utils.$('groups-col');
+    if (!container) return;
+
+    Utils.clearElement(container);
+
+    const user = this.authManager.getCurrentUser();
+    if (!user) {
+      container.innerHTML = '<p class="muted">Login to see groups.</p>';
+      return;
+    }
+
+    const userGroups = this.dataStore.getUserGroups(user.id);
+    if (userGroups.length === 0) {
+      container.innerHTML = '<p class="muted">No groups.</p>';
+      return;
+    }
+
+    userGroups.forEach(group => {
+      const groupCard = this.createGroupCard(group);
+      container.appendChild(groupCard);
+    });
+  }
+
+  createGroupCard(group) {
+    const card = document.createElement('div');
+    card.className = 'card';
+
+    const admins = (group.admins || [])
+      .map(adminId => this.dataStore.getUser(adminId)?.username || adminId)
+      .join(', ');
+
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <strong>${group.name}</strong>
+          <div class="muted">Admins: ${admins}</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn--outline btn--small" data-action="open">Open</button>
+          ${this.authManager.isDirector() ? 
+            '<button class="btn btn--danger btn--small" data-action="delete">Delete</button>' : ''}
+        </div>
+      </div>
+    `;
+
+    Utils.addButtonListeners(card, {
+      '[data-action="open"]': () => window.app.openGroup(group.id),
+      '[data-action="delete"]': () => window.app.deleteGroup(group)
+    });
+
+    return card;
+  }
+
+  renderDashboardTasks() {
+    const container = Utils.$('tasks-col');
+    if (!container) return;
+
+    Utils.clearElement(container);
+
+    const user = this.authManager.getCurrentUser();
+    if (!user) {
+      container.innerHTML = '<p class="muted">Login to see tasks.</p>';
+      return;
+    }
+
+    const activeTasks = this.dataStore.getActiveTasks(user.id);
+    const completedTasks = this.dataStore.getCompletedTasks(user.id);
+
+    if (activeTasks.length === 0) {
+      container.innerHTML = '<p class="muted">No active tasks.</p>';
+    }
+
+    // Render active tasks
+    activeTasks.forEach(task => {
+      const taskCard = this.createActiveTaskCard(task);
+      container.appendChild(taskCard);
+    });
+
+    // Render completed tasks section
+    if (completedTasks.length > 0) {
+      const completedHeader = document.createElement('div');
+      completedHeader.className = 'card';
+      completedHeader.innerHTML = '<strong>Recently Completed</strong>';
+      container.appendChild(completedHeader);
+
+      completedTasks.forEach(task => {
+        const taskCard = this.createCompletedTaskCard(task);
+        container.appendChild(taskCard);
+      });
+    }
+  }
+
+  createActiveTaskCard(task) {
+    const card = document.createElement('div');
+    card.className = 'card';
+
+    const group = task.groupId ? this.dataStore.getGroup(task.groupId) : null;
+    const groupText = group ? `Group: ${group.name}` : 'Personal';
+
+    card.innerHTML = `
+      <div>
+        <strong>${task.title}</strong>
+        <div class="muted">${task.priority || 'medium'} • ${groupText}</div>
+      </div>
+      <div style="margin-top:8px">${task.description || ''}</div>
+      <div style="margin-top:8px">
+        <button class="btn btn--primary btn--small" data-action="complete">Mark Completed</button>
+      </div>
+    `;
+
+    Utils.addButtonListeners(card, {
+      '[data-action="complete"]': () => window.app.completeTask(task.id)
+    });
+
+    return card;
+  }
+
+  createCompletedTaskCard(task) {
+    const card = document.createElement('div');
+    card.className = 'card';
+
+    card.innerHTML = `
+      <div>
+        <strong>${task.title}</strong>
+        <div class="muted">Completed: ${Utils.formatDate(task.completedAt)}</div>
+      </div>
+      <div style="margin-top:8px">${task.description || ''}</div>
+      <div style="margin-top:8px">
+        <button class="btn btn--outline btn--small" data-action="undo">Undo</button>
+        ${this.authManager.isAdminOrDirector() ? 
+          '<button class="btn btn--danger btn--small" data-action="delete">Delete</button>' : ''}
+      </div>
+    `;
+
+    Utils.addButtonListeners(card, {
+      '[data-action="undo"]': () => window.app.uncompleteTask(task.id),
+      '[data-action="delete"]': () => window.app.deleteTask(task.id)
+    });
+
+    return card;
+  }
+
+  renderGroupsList() {
+    const container = Utils.$('groups-list');
+    if (!container) return;
+
+    Utils.clearElement(container);
+
+    const user = this.authManager.getCurrentUser();
+    if (!user) {
+      container.innerHTML = '<p class="muted">Login to see groups.</p>';
+      return;
+    }
+
+    const userGroups = this.dataStore.getUserGroups(user.id);
+    if (userGroups.length === 0) {
+      container.innerHTML = '<p class="muted">No groups.</p>';
+      return;
+    }
+
+    userGroups.forEach(group => {
+      const groupCard = this.createGroupListCard(group);
+      container.appendChild(groupCard);
+    });
+  }
+
+  createGroupListCard(group) {
+    const card = document.createElement('div');
+    card.className = 'card';
+
+    const members = (group.members || [])
+      .map(memberId => this.dataStore.getUser(memberId)?.username || memberId)
+      .join(', ');
+
+    const canDelete = this.authManager.isAdminOrDirector() && 
+                     (group.admins || []).includes(this.authManager.getCurrentUser().id);
+
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <strong>${group.name}</strong>
+          <div class="muted">Members: ${members}</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn--outline btn--small" data-action="open">Open</button>
+          ${canDelete ? '<button class="btn btn--danger btn--small" data-action="delete">Delete</button>' : ''}
+        </div>
+      </div>
+    `;
+
+    Utils.addButtonListeners(card, {
+      '[data-action="open"]': () => window.app.openGroup(group.id),
+      '[data-action="delete"]': () => window.app.deleteGroup(group)
+    });
+
+    return card;
+  }
+
+  renderChat(groupId) {
+    const container = Utils.$('chat-messages');
+    if (!container) return;
+
+    Utils.clearElement(container);
+
+    const messages = this.dataStore.getGroupMessages(groupId);
+    
+    messages.forEach(message => {
+      const messageElement = this.createMessageElement(message);
+      container.appendChild(messageElement);
+    });
+
+    container.scrollTop = container.scrollHeight;
+  }
+
+  createMessageElement(message) {
+    const div = document.createElement('div');
+    div.className = 'message';
+
+    const sender = this.dataStore.getUser(message.userId);
+    const senderName = sender?.username || message.userId;
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = `${senderName} • ${Utils.formatDate(message.timestamp)}`;
+    div.appendChild(meta);
+
+    const content = document.createElement('div');
+    content.textContent = message.content;
+    div.appendChild(content);
+
+    if (Array.isArray(message.mentions) && message.mentions.length > 0) {
+      const mentionsDiv = document.createElement('div');
+      mentionsDiv.className = 'muted';
+      const mentionedUsers = message.mentions
+        .map(userId => this.dataStore.getUser(userId)?.username || userId)
+        .join(', ');
+      mentionsDiv.textContent = `Mentioned: ${mentionedUsers}`;
+      div.appendChild(mentionsDiv);
+    }
+
+    return div;
+  }
+
+  renderPendingUsers() {
+    const container = Utils.$('pending-users-list');
+    if (!container) return;
+
+    Utils.clearElement(container);
+
+    if (!this.authManager.isDirector()) {
+      container.innerHTML = '<p class="muted">Only director can see pending approvals.</p>';
+      return;
+    }
+
+    const pendingUsers = this.dataStore.getPendingUsers();
+    if (pendingUsers.length === 0) {
+      container.innerHTML = '<p class="muted">No pending users.</p>';
+      return;
+    }
+
+    pendingUsers.forEach(user => {
+      const userCard = this.createPendingUserCard(user);
+      container.appendChild(userCard);
+    });
+  }
+
+  createPendingUserCard(user) {
+    const card = document.createElement('div');
+    card.className = 'card';
+
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <strong>${user.username}</strong>
+          <div class="muted">${Utils.formatDateShort(user.createdAt)}</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn--primary btn--small" data-action="approve">Approve</button>
+          <button class="btn btn--danger btn--small" data-action="remove">Remove</button>
+        </div>
+      </div>
+    `;
+
+    Utils.addButtonListeners(card, {
+      '[data-action="approve"]': () => window.app.approveUser(user.id),
+      '[data-action="remove"]': () => window.app.removeUser(user.id)
+    });
+
+    return card;
+  }
+
+  renderUserManagement() {
+    const container = Utils.$('user-list');
+    if (!container) return;
+
+    Utils.clearElement(container);
+
+    if (!this.authManager.isDirector()) {
+      container.innerHTML = '<p class="muted">Only director can manage users.</p>';
+      return;
+    }
+
+    const activeUsers = this.dataStore.getActiveUsers();
+    if (activeUsers.length === 0) {
+      container.innerHTML = '<p class="muted">No users.</p>';
+      return;
+    }
+
+    activeUsers.forEach(user => {
+      const userCard = this.createUserManagementCard(user);
+      container.appendChild(userCard);
+    });
+  }
+
+  createUserManagementCard(user) {
+    const card = document.createElement('div');
+    card.className = 'card';
+
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <strong>${user.username}</strong>
+          <div class="muted">Role: ${user.role}</div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn--outline btn--small" data-action="set-user">User</button>
+          <button class="btn btn--outline btn--small" data-action="set-admin">Admin</button>
+          <button class="btn btn--outline btn--small" data-action="set-director">Director</button>
+          <button class="btn btn--danger btn--small" data-action="remove">Remove</button>
+        </div>
+      </div>
+    `;
+
+    Utils.addButtonListeners(card, {
+      '[data-action="set-user"]': () => window.app.changeUserRole(user.id, 'user'),
+      '[data-action="set-admin"]': () => window.app.changeUserRole(user.id, 'admin'),
+      '[data-action="set-director"]': () => window.app.changeUserRole(user.id, 'director'),
+      '[data-action="remove"]': () => window.app.removeUser(user.id)
+    });
+
+    return card;
+  }
+}
+
+// ============================================================================
+// MODAL MANAGER
+// ============================================================================
+class ModalManager {
+  constructor(dataStore, authManager, firebaseService) {
+    this.dataStore = dataStore;
+    this.authManager = authManager;
+    this.firebase = firebaseService;
+    this.setupEventListeners();
+  }
+
+  setupEventListeners() {
+    // Create Group Modal
+    const createGroupBtn = Utils.$('create-group-btn');
+    if (createGroupBtn) {
+      createGroupBtn.addEventListener('click', () => this.showCreateGroupModal());
+    }
+
+    // Create Task Modal
+    const createTaskBtn = Utils.$('create-task-btn');
+    if (createTaskBtn) {
+      createTaskBtn.addEventListener('click', () => this.showCreateTaskModal());
+    }
+
+    // Create DM Modal
+    const newDmBtn = Utils.$('new-dm-btn');
+    if (newDmBtn) {
+      newDmBtn.addEventListener('click', () => this.showCreateDMModal());
+    }
+
+    // Modal confirm/cancel buttons
+    this.setupModalButtons();
+  }
+
+  setupModalButtons() {
+    const modals = [
+      {
+        modal: 'modal-create-group',
+        confirm: 'create-group-confirm',
+        cancel: 'create-group-cancel',
+        handler: () => this.handleCreateGroup()
+      },
+      {
+        modal: 'modal-create-task',
+        confirm: 'create-task-confirm',
+        cancel: 'create-task-cancel',
+        handler: () => this.handleCreateTask()
+      },
+      {
+        modal: 'modal-create-dm',
+        confirm: 'create-dm-confirm',
+        cancel: 'create-dm-cancel',
+        handler: () => this.handleCreateDM()
+      }
+    ];
+
+    modals.forEach(({ modal, confirm, cancel, handler }) => {
+      const confirmBtn = Utils.$(confirm);
+      const cancelBtn = Utils.$(cancel);
+      const modalEl = Utils.$(modal);
+
+      if (confirmBtn) confirmBtn.addEventListener('click', handler);
+      if (cancelBtn) cancelBtn.addEventListener('click', () => Utils.hideElement(modalEl));
+    });
+  }
+
+  showCreateGroupModal() {
+    // Strict role enforcement
+    if (!this.authManager.isAdminOrDirector()) {
+      Utils.showToast('Only admins and directors can create groups', 'error');
+      return;
+    }
+
+    const modal = Utils.$('modal-create-group');
+    const membersContainer = Utils.$('members-checkboxes');
+    const adminsContainer = Utils.$('admins-checkboxes');
+    const nameInput = Utils.$('group-name');
+
+    // Clear previous data
+    Utils.clearElement(membersContainer);
+    Utils.clearElement(adminsContainer);
+    if (nameInput) nameInput.value = '';
+
+    // Populate user checkboxes
+    const activeUsers = this.dataStore.getActiveUsers();
+    activeUsers.forEach(user => {
+      if (membersContainer) {
+        const memberDiv = document.createElement('div');
+        memberDiv.innerHTML = `
+          <label style="display:flex;gap:8px;align-items:center">
+            <input type="checkbox" value="${user.id}" />
+            <span>${user.username}</span>
+          </label>
+        `;
+        membersContainer.appendChild(memberDiv);
+      }
+
+      if (adminsContainer) {
+        const adminDiv = document.createElement('div');
+        adminDiv.innerHTML = `
+          <label style="display:flex;gap:8px;align-items:center">
+            <input type="checkbox" value="${user.id}" />
+            <span>${user.username}</span>
+          </label>
+        `;
+        adminsContainer.appendChild(adminDiv);
+      }
+    });
+
+    Utils.showElement(modal);
+  }
+
+  async handleCreateGroup() {
+    const nameInput = Utils.$('group-name');
+    const membersContainer = Utils.$('members-checkboxes');
+    const adminsContainer = Utils.$('admins-checkboxes');
+    const modal = Utils.$('modal-create-group');
+
+    const name = nameInput?.value.trim();
+    if (!name) {
+      Utils.showToast('Group name is required', 'error');
+      return;
+    }
+
+    const memberIds = membersContainer ? 
+      Array.from(membersContainer.querySelectorAll('input:checked')).map(input => input.value) : [];
+    
+    const adminIds = adminsContainer ? 
+      Array.from(adminsContainer.querySelectorAll('input:checked')).map(input => input.value) : [];
+
+    if (adminIds.length === 0) {
+      Utils.showToast('Please select at least one admin', 'error');
+      return;
+    }
+
+    try {
+      const groupData = {
+        name,
+        members: memberIds,
+        admins: adminIds,
+        type: 'team',
+        createdAt: new Date().toISOString()
+      };
+
+      const groupRef = await this.firebase.addDoc('groups', groupData);
+
+      // Update user records
+      for (const userId of memberIds) {
+        try {
+          const userDoc = await this.firebase.getDoc('users', userId);
+          if (userDoc.exists()) {
+            const userData = userDoc.data();
+            const userGroups = userData.groups || [];
+            if (!userGroups.includes(groupRef.id)) {
+              await this.firebase.updateDoc('users', userId, {
+                groups: [...userGroups, groupRef.id]
+              });
+            }
+          }
+        } catch (error) {
+          console.warn('Failed to update user groups:', error);
+        }
+      }
+
+      Utils.showToast('Group created successfully', 'success');
+      Utils.hideElement(modal);
+
+    } catch (error) {
+      console.error('Create group failed:', error);
+      Utils.showToast('Failed to create group', 'error');
+    }
+  }
+
+  showCreateTaskModal() {
+    const modal = Utils.$('modal-create-task');
+    const assignToSelect = Utils.$('task-assign-to');
+    const groupSelect = Utils.$('task-group');
+    
+    // Clear form
+    const titleInput = Utils.$('task-title');
+    const descInput = Utils.$('task-desc');
+    const privateCheckbox = Utils.$('task-private');
+    
+    if (titleInput) titleInput.value = '';
+    if (descInput) descInput.value = '';
+    if (privateCheckbox) privateCheckbox.checked = false;
+
+    // Populate assign to dropdown
+    if (assignToSelect) {
+      Utils.clearElement(assignToSelect);
+      const activeUsers = this.dataStore.getActiveUsers();
+      activeUsers.forEach(user => {
+        const option = document.createElement('option');
+        option.value = user.id;
+        option.textContent = user.username;
+        assignToSelect.appendChild(option);
+      });
+    }
+
+    // Populate group dropdown
+    if (groupSelect) {
+      Utils.clearElement(groupSelect);
+      
+      const noGroupOption = document.createElement('option');
+      noGroupOption.value = '';
+      noGroupOption.textContent = '(no group - personal)';
+      groupSelect.appendChild(noGroupOption);
+
+      const userGroups = this.dataStore.getUserGroups(this.authManager.getCurrentUser().id);
+      userGroups.forEach(group => {
+        const option = document.createElement('option');
+        option.value = group.id;
+        option.textContent = group.name;
+        groupSelect.appendChild(option);
+      });
+    }
+
+    Utils.showElement(modal);
+  }
+
+  async handleCreateTask() {
+    const titleInput = Utils.$('task-title');
+    const descInput = Utils.$('task-desc');
+    const assignToSelect = Utils.$('task-assign-to');
+    const groupSelect = Utils.$('task-group');
+    const privateCheckbox = Utils.$('task-private');
+    const modal = Utils.$('modal-create-task');
+
+    const title = titleInput?.value.trim();
+    const description = descInput?.value.trim();
+    const assignedTo = assignToSelect?.value;
+    const groupId = groupSelect?.value || null;
+    const isPrivate = privateCheckbox?.checked;
+
+    if (!title || !assignedTo) {
+      Utils.showToast('Please fill in all required fields', 'error');
+      return;
+    }
+
+    try {
+      const taskData = {
+        title,
+        description,
+        assignedBy: this.authManager.getCurrentUser().id,
+        assignedTo,
+        status: 'in-progress',
+        priority: 'medium',
+        dueDate: null,
+        groupId: isPrivate ? null : groupId,
+        private: !!isPrivate,
+        archived: false,
+        createdAt: new Date().toISOString()
+      };
+
+      const taskRef = await this.firebase.addDoc('tasks', taskData);
+
+      // Create notification message
+      if (!isPrivate && groupId) {
+        await this.firebase.addDoc('messages', {
+          groupId,
+          userId: this.authManager.getCurrentUser().id,
+          content: `Task assigned: ${title}`,
+          type: 'task-assignment',
+          parentMessageId: null,
+          taskId: taskRef.id,
+          timestamp: new Date().toISOString()
+        });
+      } else {
+        const assignedUser = this.dataStore.getUser(assignedTo);
+        await this.firebase.addDoc('messages', {
+          groupId: null,
+          userId: this.authManager.getCurrentUser().id,
+          content: `Private task for ${assignedUser?.username || assignedTo}: ${title}`,
+          type: 'private-task',
+          parentMessageId: null,
+          taskId: taskRef.id,
+          timestamp: new Date().toISOString(),
+          mentions: [assignedTo]
+        });
+      }
+
+      Utils.showToast('Task created successfully', 'success');
+      Utils.hideElement(modal);
+
+    } catch (error) {
+      console.error('Create task failed:', error);
+      Utils.showToast('Failed to create task', 'error');
+    }
+  }
+
+  showCreateDMModal() {
+    const modal = Utils.$('modal-create-dm');
+    const userSelect = Utils.$('dm-user-select');
+
+    if (userSelect) {
+      Utils.clearElement(userSelect);
+      const activeUsers = this.dataStore.getActiveUsers();
+      const currentUserId = this.authManager.getCurrentUser().id;
+      
+      activeUsers
+        .filter(user => user.id !== currentUserId)
+        .forEach(user => {
+          const option = document.createElement('option');
+          option.value = user.id;
+          option.textContent = user.username;
+          userSelect.appendChild(option);
+        });
+    }
+
+    Utils.showElement(modal);
+  }
+
+  async handleCreateDM() {
+    const userSelect = Utils.$('dm-user-select');
+    const modal = Utils.$('modal-create-dm');
+    
+    const otherUserId = userSelect?.value;
+    if (!otherUserId) {
+      Utils.showToast('Please select a user', 'error');
+      return;
+    }
+
+    try {
+      const currentUserId = this.authManager.getCurrentUser().id;
+      
+      // Check if DM already exists
+      const existingDM = this.dataStore.getAllGroups().find(group => 
+        group.type === 'dm' && 
+        (group.members || []).includes(currentUserId) && 
+        (group.members || []).includes(otherUserId)
+      );
+
+      if (existingDM) {
+        Utils.hideElement(modal);
+        window.app.openGroup(existingDM.id);
+        return;
+      }
+
+      // Create new DM
+      const otherUser = this.dataStore.getUser(otherUserId);
+      const dmData = {
+        name: `DM: ${otherUser?.username || otherUserId}`,
+        members: [currentUserId, otherUserId],
+        admins: [],
+        type: 'dm',
+        createdAt: new Date().toISOString()
+      };
+
+      const dmRef = await this.firebase.addDoc('groups', dmData);
+      Utils.hideElement(modal);
+      window.app.openGroup(dmRef.id);
+      Utils.showToast('Direct message created', 'success');
+
+    } catch (error) {
+      console.error('Create DM failed:', error);
+      Utils.showToast('Failed to create DM', 'error');
+    }
+  }
+}
+
+// ============================================================================
+// MAIN APPLICATION CLASS
+// ============================================================================
+class TaskFlowApp {
+  constructor() {
+    this.firebase = new FirebaseService();
+    this.dataStore = new DataStore();
+    this.authManager = new AuthenticationManager(this.firebase, this.dataStore);
+    this.navigationManager = new NavigationManager();
+    this.uiRenderer = new UIRenderer(this.dataStore, this.authManager);
+    this.modalManager = new ModalManager(this.dataStore, this.authManager, this.firebase);
+    
+    this.currentGroup = null;
+    this.autoArchiveInterval = null;
+    
+    this.setupEventListeners();
+    this.initializeApp();
+  }
+
+  setupEventListeners() {
+    // Send message
+    const sendMsgBtn = Utils.$('send-msg');
+    if (sendMsgBtn) {
+      sendMsgBtn.addEventListener('click', () => this.sendMessage());
+    }
+
+    // Back to groups
+    const backToGroups = Utils.$('back-to-groups');
+    if (backToGroups) {
+      backToGroups.addEventListener('click', () => {
+        this.currentGroup = null;
+        this.navigationManager.navigateTo('groups');
+      });
+    }
+
+    // Refresh button
+    const refreshBtn = Utils.$('refresh-btn');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', () => this.refreshData());
+    }
+
+    // Show completed/archived tasks
+    const showCompletedBtn = Utils.$('show-completed');
+    const showArchivedBtn = Utils.$('show-archived');
+    
+    if (showCompletedBtn) {
+      showCompletedBtn.addEventListener('click', () => this.showCompletedTasks());
+    }
+    
+    if (showArchivedBtn) {
+      showArchivedBtn.addEventListener('click', () => this.showArchivedTasks());
+    }
+  }
+
+  initializeApp() {
+    this.navigationManager.showView('login');
+    this.startAutoArchive();
+  }
+
+  // Called when user logs in
+  onUserLogin(user) {
+    this.startDataListeners();
+    this.loadInitialData();
+    this.navigationManager.navigateTo('dashboard', { resetHistory: true });
+  }
+
+  // Called when user logs out
+  onUserLogout() {
+    this.firebase.removeAllListeners();
+    this.dataStore.clear();
+    this.currentGroup = null;
+    this.navigationManager.clearHistory();
+    this.navigationManager.showView('login');
+  }
+
+  // Called when view changes
+  onViewChange(view) {
+    switch (view) {
+      case 'dashboard':
+        this.uiRenderer.renderDashboardGroups();
+        this.uiRenderer.renderDashboardTasks();
+        break;
+      case 'groups':
+        this.uiRenderer.renderGroupsList();
+        break;
+      case 'admin':
+        this.uiRenderer.renderPendingUsers();
+        this.uiRenderer.renderUserManagement();
+        break;
+      case 'profile':
+        this.uiRenderer.renderProfile();
+        break;
+      case 'groupChat':
+        if (this.currentGroup) {
+          this.uiRenderer.renderChat(this.currentGroup.id);
+          this.populateMentionSelect();
+        }
+        break;
+    }
+  }
+
+  startDataListeners() {
+    // Users listener
+    this.firebase.addListener('users', 'users', (snapshot) => {
+      const users = [];
+      snapshot.forEach(doc => {
+        users.push({ id: doc.id, ...doc.data() });
+      });
+      this.dataStore.setUsers(users);
+      this.onDataUpdate('users');
+    });
+
+    // Groups listener
+    this.firebase.addListener('groups', 'groups', (snapshot) => {
+      const groups = [];
+      snapshot.forEach(doc => {
+        groups.push({ id: doc.id, ...doc.data() });
+      });
+      this.dataStore.setGroups(groups);
+      this.onDataUpdate('groups');
+    });
+
+    // Tasks listener
+    this.firebase.addListener('tasks', 'tasks', (snapshot) => {
+      const tasks = [];
+      snapshot.forEach(doc => {
+        tasks.push({ id: doc.id, ...doc.data() });
+      });
+      this.dataStore.setTasks(tasks);
+      this.onDataUpdate('tasks');
+    });
+
+    // Messages listener
+    this.firebase.addListener('messages', 'messages', (snapshot) => {
+      const messages = [];
+      snapshot.forEach(doc => {
+        messages.push({ id: doc.id, ...doc.data() });
+      });
+      this.dataStore.setMessages(messages);
+      this.onDataUpdate('messages');
+    });
+  }
+
+  onDataUpdate(dataType) {
+    // Refresh relevant UI components based on data type
+    const currentView = this.navigationManager.currentView;
+    
+    if (dataType === 'users') {
+      this.uiRenderer.renderPendingUsers();
+      this.uiRenderer.renderUserManagement();
+      this.uiRenderer.renderProfile();
+    }
+    
+    if (dataType === 'groups') {
+      this.uiRenderer.renderDashboardGroups();
+      this.uiRenderer.renderGroupsList();
+      
+      // Update current group if viewing chat
+      if (this.currentGroup && currentView === 'groupChat') {
+        const updatedGroup = this.dataStore.getGroup(this.currentGroup.id);
+        if (updatedGroup) {
+          this.currentGroup = updatedGroup;
+          Utils.safeText(Utils.$('chat-group-name'), this.currentGroup.name);
+          const membersCount = Utils.$('chat-members-count');
+          if (membersCount) {
+            membersCount.textContent = `${(this.currentGroup.members || []).length} members`;
+          }
+          this.populateMentionSelect();
+        }
       }
     }
-    const ts = await getDocs(query(collection(db, 'tasks'), where('assignedTo', '==', uid)));
-    for (const t of ts.docs) await updateDoc(doc(db, 'tasks', t.id), { assignedTo: null });
-    await deleteDoc(doc(db, 'users', uid));
-  } catch (e) {
-    console.error('deleteUser failed', e);
-    throw e;
+    
+    if (dataType === 'tasks') {
+      this.uiRenderer.renderDashboardTasks();
+    }
+    
+    if (dataType === 'messages') {
+      if (this.currentGroup && currentView === 'groupChat') {
+        this.uiRenderer.renderChat(this.currentGroup.id);
+      }
+    }
+  }
+
+  async loadInitialData() {
+    try {
+      const [users, groups, tasks, messages] = await Promise.all([
+        this.firebase.getDocs('users'),
+        this.firebase.getDocs('groups'),
+        this.firebase.getDocs('tasks'),
+        this.firebase.getDocs('messages')
+      ]);
+
+      const userData = [];
+      users.forEach(doc => userData.push({ id: doc.id, ...doc.data() }));
+      this.dataStore.setUsers(userData);
+
+      const groupData = [];
+      groups.forEach(doc => groupData.push({ id: doc.id, ...doc.data() }));
+      this.dataStore.setGroups(groupData);
+
+      const taskData = [];
+      tasks.forEach(doc => taskData.push({ id: doc.id, ...doc.data() }));
+      this.dataStore.setTasks(taskData);
+
+      const messageData = [];
+      messages.forEach(doc => messageData.push({ id: doc.id, ...doc.data() }));
+      this.dataStore.setMessages(messageData);
+
+      this.autoArchiveOldTasks();
+
+    } catch (error) {
+      console.error('Failed to load initial ', error);
+      Utils.showToast('Failed to load initial data', 'error');
+    }
+  }
+
+  async openGroup(groupId) {
+    try {
+      let group = this.dataStore.getGroup(groupId);
+      
+      if (!group) {
+        const groupDoc = await this.firebase.getDoc('groups', groupId);
+        if (groupDoc.exists()) {
+          group = { id: groupDoc.id, ...groupDoc.data() };
+        }
+      }
+
+      if (!group) {
+        Utils.showToast('Group not found', 'error');
+        return;
+      }
+
+      const currentUser = this.authManager.getCurrentUser();
+      if (!(group.members || []).includes(currentUser.id)) {
+        Utils.showToast('Access denied - you are not a member of this group', 'error');
+        return;
+      }
+
+      this.currentGroup = group;
+      Utils.safeText(Utils.$('chat-group-name'), group.name);
+      
+      const membersCount = Utils.$('chat-members-count');
+      if (membersCount) {
+        membersCount.textContent = `${(group.members || []).length} members`;
+      }
+
+      this.populateMentionSelect();
+      this.navigationManager.navigateTo('groupChat');
+      this.uiRenderer.renderChat(groupId);
+
+    } catch (error) {
+      console.error('Failed to open group:', error);
+      Utils.showToast('Failed to open group', 'error');
+    }
+  }
+
+  populateMentionSelect() {
+    const mentionSelect = Utils.$('mention-select');
+    if (!mentionSelect || !this.currentGroup) return;
+
+    Utils.clearElement(mentionSelect);
+    
+    (this.currentGroup.members || []).forEach(memberId => {
+      const user = this.dataStore.getUser(memberId);
+      const option = document.createElement('option');
+      option.value = memberId;
+      option.textContent = user?.username || memberId;
+      mentionSelect.appendChild(option);
+    });
+  }
+
+  async sendMessage() {
+    if (!this.currentGroup) {
+      Utils.showToast('Open a group first', 'error');
+      return;
+    }
+
+    const chatInput = Utils.$('chat-input');
+    const mentionSelect = Utils.$('mention-select');
+    
+    const messageText = chatInput?.value.trim();
+    if (!messageText) return;
+
+    const mentions = mentionSelect ? 
+      Array.from(mentionSelect.selectedOptions).map(option => option.value) : [];
+    
+    // Filter mentions to only include group members
+    const allowedMentions = (this.currentGroup.members || []).filter(memberId => 
+      mentions.includes(memberId)
+    );
+
+    try {
+      await this.firebase.addDoc('messages', {
+        groupId: this.currentGroup.id,
+        userId: this.authManager.getCurrentUser().id,
+        content: messageText,
+        type: 'message',
+        parentMessageId: null,
+        taskId: null,
+        timestamp: new Date().toISOString(),
+        mentions: allowedMentions
+      });
+
+      if (chatInput) chatInput.value = '';
+      if (mentionSelect) mentionSelect.selectedIndex = -1;
+
+    } catch (error) {
+      console.error('Send message failed:', error);
+      Utils.showToast('Failed to send message', 'error');
+    }
+  }
+
+  async deleteGroup(group) {
+    // Strict role enforcement
+    if (!this.authManager.isAdminOrDirector()) {
+      Utils.showToast("You don't have permission to delete groups", 'error');
+      return;
+    }
+
+    if (!confirm(`Delete group "${group.name}"? This will remove all messages and tasks.`)) {
+      return;
+    }
+
+    try {
+      // Delete all messages in the group
+      const messages = await this.firebase.getDocs('messages', [where('groupId', '==', group.id)]);
+      for (const messageDoc of messages.docs) {
+        await this.firebase.deleteDoc('messages', messageDoc.id);
+      }
+
+      // Delete all tasks in the group
+      const tasks = await this.firebase.getDocs('tasks', [where('groupId', '==', group.id)]);
+      for (const taskDoc of tasks.docs) {
+        await this.firebase.deleteDoc('tasks', taskDoc.id);
+      }
+
+      // Delete the group itself
+      await this.firebase.deleteDoc('groups', group.id);
+      
+      Utils.showToast('Group deleted successfully', 'success');
+
+    } catch (error) {
+      console.error('Delete group failed:', error);
+      Utils.showToast('Failed to delete group', 'error');
+    }
+  }
+
+  async completeTask(taskId) {
+    try {
+      await this.firebase.updateDoc('tasks', taskId, {
+        status: 'completed',
+        completedAt: new Date().toISOString()
+      });
+      Utils.showToast('Task marked as completed', 'success');
+    } catch (error) {
+      console.error('Complete task failed:', error);
+      Utils.showToast('Failed to complete task', 'error');
+    }
+  }
+
+  async uncompleteTask(taskId) {
+    try {
+      await this.firebase.updateDoc('tasks', taskId, {
+        status: 'in-progress',
+        completedAt: null
+      });
+      Utils.showToast('Task restored', 'success');
+    } catch (error) {
+      console.error('Uncomplete task failed:', error);
+      Utils.showToast('Failed to restore task', 'error');
+    }
+  }
+
+  async deleteTask(taskId) {
+    if (!confirm('Delete this task permanently?')) return;
+
+    try {
+      await this.firebase.deleteDoc('tasks', taskId);
+      Utils.showToast('Task deleted', 'success');
+    } catch (error) {
+      console.error('Delete task failed:', error);
+      Utils.showToast('Failed to delete task', 'error');
+    }
+  }
+
+  async approveUser(userId) {
+    // Strict role enforcement
+    if (!this.authManager.isDirector()) {
+      Utils.showToast("Only director can approve users", 'error');
+      return;
+    }
+
+    try {
+      await this.firebase.updateDoc('users', userId, { status: 'active' });
+      Utils.showToast('User approved', 'success');
+    } catch (error) {
+      console.error('Approve user failed:', error);
+      Utils.showToast('Failed to approve user', 'error');
+    }
+  }
+
+  async removeUser(userId) {
+    // Strict role enforcement
+    if (!this.authManager.isAdminOrDirector()) {
+      Utils.showToast("You don't have permission to remove users", 'error');
+      return;
+    }
+
+    if (!confirm('Remove this user?')) return;
+
+    try {
+      await this.deleteUser(userId);
+      Utils.showToast('User removed', 'success');
+    } catch (error) {
+      console.error('Remove user failed:', error);
+      Utils.showToast('Failed to remove user', 'error');
+    }
+  }
+
+  async changeUserRole(userId, role) {
+    // Strict role enforcement
+    if (!this.authManager.isDirector()) {
+      Utils.showToast("Only director can change user roles", 'error');
+      return;
+    }
+
+    try {
+      await this.firebase.updateDoc('users', userId, { role });
+      Utils.showToast('User role updated', 'success');
+    } catch (error) {
+      console.error('Change role failed:', error);
+      Utils.showToast('Failed to change role', 'error');
+    }
+  }
+
+  async deleteUser(userId) {
+    // Strict role enforcement
+    if (!this.authManager.isDirector()) {
+      Utils.showToast("Only director can delete users", 'error');
+      return;
+    }
+
+    if (!confirm('Really delete user and remove from all groups and tasks?')) {
+      return;
+    }
+
+    try {
+      // Remove from groups
+      const userGroups = this.dataStore.getAllGroups().filter(group => 
+        (group.members || []).includes(userId)
+      );
+
+      for (const group of userGroups) {
+        if (group.type === 'dm') {
+          // Delete DM groups entirely
+          const messages = await this.firebase.getDocs('messages', [where('groupId', '==', group.id)]);
+          for (const messageDoc of messages.docs) {
+            await this.firebase.deleteDoc('messages', messageDoc.id);
+          }
+          await this.firebase.deleteDoc('groups', group.id);
+        } else {
+          // Remove from regular groups
+          const updatedMembers = (group.members || []).filter(memberId => memberId !== userId);
+          const updatedAdmins = (group.admins || []).filter(adminId => adminId !== userId);
+          
+          await this.firebase.updateDoc('groups', group.id, {
+            members: updatedMembers,
+            admins: updatedAdmins
+          });
+        }
+      }
+
+      // Unassign tasks
+      const userTasks = await this.firebase.getDocs('tasks', [where('assignedTo', '==', userId)]);
+      for (const taskDoc of userTasks.docs) {
+        await this.firebase.updateDoc('tasks', taskDoc.id, { assignedTo: null });
+      }
+
+      // Delete user
+      await this.firebase.deleteDoc('users', userId);
+
+    } catch (error) {
+      console.error('Delete user failed:', error);
+      throw error;
+    }
+  }
+
+  refreshData() {
+    const currentView = this.navigationManager.currentView;
+    this.onViewChange(currentView);
+    Utils.showToast('Data refreshed', 'info');
+  }
+
+  showCompletedTasks() {
+    const user = this.authManager.getCurrentUser();
+    const completedTasks = this.dataStore.getCompletedTasks(user.id);
+    
+    if (completedTasks.length === 0) {
+      Utils.showToast('No completed tasks', 'info');
+      return;
+    }
+
+    const taskList = completedTasks
+      .map(task => `${task.title} (${Utils.formatDate(task.completedAt)})`)
+      .join('\n');
+    
+    // Using alert for lists as requested
+    alert('Completed tasks:\n' + taskList);
+  }
+
+  showArchivedTasks() {
+    const user = this.authManager.getCurrentUser();
+    const archivedTasks = this.dataStore.getAllTasks()
+      .filter(task => task.assignedTo === user.id && task.archived);
+    
+    if (archivedTasks.length === 0) {
+      Utils.showToast('No archived tasks', 'info');
+      return;
+    }
+
+    const taskList = archivedTasks.map(task => task.title).join('\n');
+    // Using alert for lists as requested
+    alert('Archived tasks:\n' + taskList);
+  }
+
+  startAutoArchive() {
+    this.autoArchiveInterval = setInterval(() => {
+      this.autoArchiveOldTasks();
+    }, CONFIG.autoArchive.interval);
+  }
+
+  async autoArchiveOldTasks() {
+    try {
+      const cutoffDate = Date.now() - (CONFIG.autoArchive.daysOld * 24 * 60 * 60 * 1000);
+      const taskDocs = await this.firebase.getDocs('tasks');
+      
+      for (const taskDoc of taskDocs.docs) {
+        const task = taskDoc.data();
+        
+        if (task.status === 'completed' && !task.archived && task.completedAt) {
+          const completedDate = new Date(task.completedAt).getTime();
+          
+          if (completedDate < cutoffDate) {
+            await this.firebase.updateDoc('tasks', taskDoc.id, { archived: true });
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Auto-archive failed:', error);
+    }
   }
 }
 
-/* Refresh button (if present) */
-if (refreshBtn) refreshBtn.addEventListener('click', () => {
-  renderDashboardGroups();
-  renderDashboardTasks();
-  renderMentionsColumn();
-  if (currentGroup) renderChat(currentGroup.id);
+// ============================================================================
+// APPLICATION INITIALIZATION
+// ============================================================================
+window.addEventListener('DOMContentLoaded', () => {
+  window.app = new TaskFlowApp();
+  
+  // Debug helper
+  window._tf_debug = {
+    getAppState: () => ({
+      currentUser: window.app.authManager.getCurrentUser(),
+      currentGroup: window.app.currentGroup,
+      currentView: window.app.navigationManager.currentView,
+      dataStore: {
+        users: window.app.dataStore.getAllUsers().length,
+        groups: window.app.dataStore.getAllGroups().length,
+        tasks: window.app.dataStore.getAllTasks().length,
+        messages: window.app.dataStore.getAllMessages().length
+      }
+    }),
+    
+    clearData: () => {
+      window.app.dataStore.clear();
+      console.log('Data store cleared');
+    },
+    
+    reloadData: () => {
+      window.app.loadInitialData();
+      console.log('Data reloaded');
+    }
+  };
+  
+  console.log('TaskFlow initialized successfully');
 });
 
-/* convenient Enter-to-login if password input present */
-if (loginPassword) loginPassword.addEventListener('keydown', (e) => { if (e.key === 'Enter' && loginBtn) loginBtn.click(); });
-
-/* Debug API for console (small) */
-window._tf_app = {
-  getState: () => ({
-    currentUser: currentUser ? { id: currentUser.id ?? currentUser.username, username: currentUser.username, role: currentUser.role, status: currentUser.status } : null,
-    counts: { users: Object.keys(users).length, groups: Object.keys(groups).length, tasks: Object.keys(tasks).length, messages: Object.keys(messages).length },
-    currentGroup: currentGroup ? { id: currentGroup.id, name: currentGroup.name } : null,
-    listenersActive: !!(unsub.users || unsub.groups || unsub.tasks || unsub.messages)
-  }),
-  startListeners: () => { try { startListeners(); return { ok: true }; } catch (e) { return { ok: false, error: String(e) }; } }
-};
-
-/* Initial: show login screen */
-showView('login');
+// ============================================================================
+// END OF APPLICATION
+// ============================================================================
