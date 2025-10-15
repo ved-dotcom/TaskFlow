@@ -1,14 +1,19 @@
 // ============================================================================
 // TASKFLOW - COMPLETE PRODUCTION APPLICATION (UPDATED)
 // ============================================================================
-// Added features:
-// - "Assigned by me" section on dashboard so users can see tasks they've given to others.
-// - Director-only dashboard section to view all remaining tasks across the org.
-// - Optional due date field in create task modal (reads from element 'task-due-date').
-// - "Show group members" feature in group chat (button id 'show-members-btn') to list who is present.
-// - DataStore helper getTasksAssignedBy and related UI updates.
-// - Task cards now display due dates where available.
-// No mentions page, strict role enforcement, always-visible buttons, centered modals
+// Changes in this version (per your request):
+// - Assignee and Group dropdowns in Create Task modal are interlinked:
+//   * Selecting a user filters groups to those both users share.
+//   * Selecting a group filters assignees to that group's members.
+// - Removed the "Private" checkbox. If no group is selected when creating a task,
+//   the app will create or reuse a DM (two-person group) between assigner and assignee,
+//   attach the task to that DM, and update both users' group lists.
+// - Any message sent into a group automatically becomes a task attached to that group.
+//   Group messages/tasks keep mentions on the message and those mentions still appear
+//   in the message UI and in the mentions tab (unchanged).
+// - Group tasks are visible to everyone in the group and completable by any group member.
+// - Once a group task is completed it disappears from the group task list (only pending remain).
+// - UI: group chat now renders a group tasks list (pending tasks) above the messages.
 // ============================================================================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
@@ -878,10 +883,21 @@ class UIRenderer {
 
     const dueText = task.dueDate ? ` • due ${Utils.formatDateShort(task.dueDate)}` : '';
 
+    // Show who completed and when for admin/director (and assigner)
+    let completedByText = '';
+    if (task.completedAt) {
+      const completedByName = this.dataStore.getUser(task.completedBy)?.username || task.completedBy || '';
+      if (this.authManager.isAdminOrDirector() || this.authManager.getCurrentUser()?.id === task.assignedBy) {
+        completedByText = ` • completed by ${completedByName} at ${Utils.formatDate(task.completedAt)}`;
+      } else {
+        completedByText = ` • completed at ${Utils.formatDate(task.completedAt)}`;
+      }
+    }
+
     card.innerHTML = `
       <div>
         <strong>${task.title}</strong>
-        <div class="muted">Completed: ${Utils.formatDate(task.completedAt)}${dueText}</div>
+        <div class="muted">Completed: ${Utils.formatDate(task.completedAt) || ''}${dueText}${completedByText}</div>
       </div>
       <div style="margin-top:8px">${task.description || ''}</div>
       <div style="margin-top:8px">
@@ -955,7 +971,63 @@ class UIRenderer {
     return card;
   }
 
+  // Render pending group tasks for the open group (visible above chat messages)
+  renderGroupTasks(groupId) {
+    const container = Utils.$('group-tasks-list');
+    if (!container) return;
+
+    Utils.clearElement(container);
+
+    const group = this.dataStore.getGroup(groupId);
+    if (!group) {
+      container.innerHTML = '<p class="muted">Group not found</p>';
+      return;
+    }
+
+    // pending tasks only: not archived and not completed
+    const pending = this.dataStore.getAllTasks()
+      .filter(t => t.groupId === groupId && !t.archived && t.status !== 'completed');
+
+    if (pending.length === 0) {
+      container.innerHTML = '<p class="muted">No pending tasks for this group.</p>';
+      return;
+    }
+
+    pending.forEach(task => {
+      const taskCard = this.createGroupTaskCard(task);
+      container.appendChild(taskCard);
+    });
+  }
+
+  createGroupTaskCard(task) {
+    const card = document.createElement('div');
+    card.className = 'card';
+
+    const assignee = task.assignedTo ? (this.dataStore.getUser(task.assignedTo)?.username || task.assignedTo) : 'Unassigned';
+    const dueText = task.dueDate ? ` • due ${Utils.formatDateShort(task.dueDate)}` : '';
+
+    card.innerHTML = `
+      <div>
+        <strong>${task.title}</strong>
+        <div class="muted">To: ${assignee}${dueText}</div>
+      </div>
+      <div style="margin-top:8px">${task.description || ''}</div>
+      <div style="margin-top:8px;display:flex;gap:8px">
+        <button class="btn btn--primary btn--small" data-action="complete">Mark Completed</button>
+      </div>
+    `;
+
+    Utils.addButtonListeners(card, {
+      '[data-action="complete"]': () => window.app.completeTaskFromMessage(task.id)
+    });
+
+    return card;
+  }
+
   renderChat(groupId) {
+    // Render group tasks above messages (pending tasks only)
+    this.renderGroupTasks(groupId);
+
     const container = Utils.$('chat-messages');
     if (!container) return;
 
@@ -983,18 +1055,110 @@ class UIRenderer {
     meta.textContent = `${senderName} • ${Utils.formatDate(message.timestamp)}`;
     div.appendChild(meta);
 
-    const content = document.createElement('div');
-    content.textContent = message.content;
-    div.appendChild(content);
+    // If this message references a task assignment, render interactive task card/button
+    if ((message.type === 'task-assignment' || message.type === 'private-task') && message.taskId) {
+      const task = this.dataStore.getTask(message.taskId);
+      if (task) {
+        const taskContainer = document.createElement('div');
+        taskContainer.style.marginTop = '6px';
+        taskContainer.style.padding = '8px';
+        taskContainer.style.borderRadius = '8px';
+        taskContainer.style.background = 'rgba(255,255,255,0.02)';
+        taskContainer.style.display = 'flex';
+        taskContainer.style.flexDirection = 'column';
+        taskContainer.style.gap = '8px';
 
-    if (Array.isArray(message.mentions) && message.mentions.length > 0) {
-      const mentionsDiv = document.createElement('div');
-      mentionsDiv.className = 'muted';
-      const mentionedUsers = message.mentions
-        .map(userId => this.dataStore.getUser(userId)?.username || userId)
-        .join(', ');
-      mentionsDiv.textContent = `Mentioned: ${mentionedUsers}`;
-      div.appendChild(mentionsDiv);
+        const titleRow = document.createElement('div');
+        titleRow.innerHTML = `<strong>${task.title}</strong> <span class="muted" style="margin-left:8px">${task.priority || 'medium'}${task.dueDate ? ' • due ' + Utils.formatDateShort(task.dueDate) : ''}</span>`;
+        taskContainer.appendChild(titleRow);
+
+        const descRow = document.createElement('div');
+        descRow.textContent = task.description || '';
+        taskContainer.appendChild(descRow);
+
+        // Mention rendering (so mentions remain visible on task-assignment messages)
+        if (Array.isArray(message.mentions) && message.mentions.length > 0) {
+          const mentionsDiv = document.createElement('div');
+          mentionsDiv.className = 'muted';
+          const mentionedUsers = message.mentions
+            .map(id => this.dataStore.getUser(id)?.username || id)
+            .join(', ');
+          mentionsDiv.textContent = `Mentioned: ${mentionedUsers}`;
+          taskContainer.appendChild(mentionsDiv);
+        }
+
+        // Status/assignment row
+        const assignmentRow = document.createElement('div');
+        assignmentRow.style.display = 'flex';
+        assignmentRow.style.justifyContent = 'space-between';
+        assignmentRow.style.alignItems = 'center';
+
+        const leftInfo = document.createElement('div');
+        const assigneeName = task.assignedTo ? (this.dataStore.getUser(task.assignedTo)?.username || task.assignedTo) : 'Unassigned';
+        leftInfo.textContent = `To: ${assigneeName}`;
+        assignmentRow.appendChild(leftInfo);
+
+        const rightControls = document.createElement('div');
+
+        // If task not completed, and current user is a member of the group (or assigned user), show button to mark completed
+        const currentUser = this.authManager.getCurrentUser();
+        const group = this.dataStore.getGroup(this.currentGroup?.id);
+        const isGroupMember = group ? (group.members || []).includes(currentUser?.id) : false;
+        const isAssignedUser = currentUser && task.assignedTo === currentUser.id;
+        const canMarkCompleted = (task.groupId && isGroupMember) || (!task.groupId && isAssignedUser) || (task.groupId && task.assignedTo == null && isGroupMember);
+
+        if (task.status !== 'completed' && canMarkCompleted) {
+          const markBtn = document.createElement('button');
+          markBtn.className = 'btn btn--primary btn--small';
+          markBtn.textContent = 'Mark Completed';
+          markBtn.addEventListener('click', () => {
+            window.app.completeTaskFromMessage(task.id);
+          });
+          rightControls.appendChild(markBtn);
+        } else if (task.status === 'completed') {
+          // Show completed badge and for admins/directors show completedBy and time
+          const completedBadge = document.createElement('span');
+          completedBadge.className = 'muted';
+          const completedByName = this.dataStore.getUser(task.completedBy)?.username || task.completedBy || '';
+          const completedInfo = `Completed${task.completedAt ? ' at ' + Utils.formatDate(task.completedAt) : ''}`;
+          if (this.authManager.isAdminOrDirector() || currentUser?.id === task.assignedBy) {
+            completedBadge.textContent = `${completedInfo} by ${completedByName}`;
+          } else {
+            completedBadge.textContent = completedInfo;
+          }
+          rightControls.appendChild(completedBadge);
+        }
+
+        assignmentRow.appendChild(rightControls);
+        taskContainer.appendChild(assignmentRow);
+
+        div.appendChild(taskContainer);
+      } else {
+        // fallback text content if task not found
+        const content = document.createElement('div');
+        content.textContent = message.content;
+        div.appendChild(content);
+      }
+    } else {
+      const content = document.createElement('div');
+      content.textContent = message.content;
+      div.appendChild(content);
+
+      if (Array.isArray(message.mentions) && message.mentions.length > 0) {
+        const mentionsDiv = document.createElement('div');
+        mentionsDiv.className = 'muted';
+        const mentionedUsers = message.mentions
+          .map(userId => this.dataStore.getUser(userId)?.username || userId)
+          .join(', ');
+        mentionsDiv.textContent = `Mentioned: ${mentionedUsers}`;
+        div.appendChild(mentionsDiv);
+      }
+    }
+
+    // Highlight if current user is mentioned
+    const currentUser = this.authManager.getCurrentUser();
+    if (currentUser && Array.isArray(message.mentions) && message.mentions.includes(currentUser.id)) {
+      div.classList.add('mentioned');
     }
 
     return div;
@@ -1132,10 +1296,15 @@ class UIRenderer {
       const assignee = task.assignedTo ? (this.dataStore.getUser(task.assignedTo)?.username || task.assignedTo) : 'Unassigned';
       const dueText = task.dueDate ? ` • due ${Utils.formatDateShort(task.dueDate)}` : '';
 
+      // Director should be able to see who assigned and (once completed) who completed and when
+      const completedByText = (task.status === 'completed' && task.completedAt) 
+        ? ` • completed by ${this.dataStore.getUser(task.completedBy)?.username || task.completedBy} at ${Utils.formatDate(task.completedAt)}`
+        : '';
+
       card.innerHTML = `
         <div>
           <strong>${task.title}</strong>
-          <div class="muted">Assigned by: ${assignedByName} • To: ${assignee}${dueText}</div>
+          <div class="muted">Assigned by: ${assignedByName} • To: ${assignee}${dueText}${completedByText}</div>
         </div>
         <div style="margin-top:8px">${task.description || ''}</div>
       `;
@@ -1320,52 +1489,151 @@ class ModalManager {
 
   showCreateTaskModal() {
     const modal = Utils.$('modal-create-task');
-    const assignToSelect = Utils.$('task-assign-to');
-    const groupSelect = Utils.$('task-group');
-    const dueDateInput = Utils.$('task-due-date'); // optional new element
-    
-    // Clear form
-    const titleInput = Utils.$('task-title');
-    const descInput = Utils.$('task-desc');
-    const privateCheckbox = Utils.$('task-private');
-    
-    if (titleInput) titleInput.value = '';
-    if (descInput) descInput.value = '';
-    if (privateCheckbox) privateCheckbox.checked = false;
-    if (dueDateInput) dueDateInput.value = ''; // clear due date
 
-    // Populate assign to dropdown
-    if (assignToSelect) {
-      Utils.clearElement(assignToSelect);
-      const activeUsers = this.dataStore.getActiveUsers();
-      activeUsers.forEach(user => {
-        const option = document.createElement('option');
-        option.value = user.id;
-        option.textContent = user.username;
-        assignToSelect.appendChild(option);
-      });
+    // Rebuild modal content with a consistent layout and interlinked selects
+    if (modal) {
+      modal.innerHTML = `
+        <div class="modal-content" style="padding:24px; display:flex; flex-direction:column; gap:12px; min-width:720px;">
+          <h2 style="margin:0 0 8px 0">Create Task</h2>
+
+          <div style="display:flex;gap:12px;align-items:center">
+            <label style="min-width:60px">Title</label>
+            <input id="task-title" style="flex:1; padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.06)" />
+            <label style="min-width:80px">Assign to</label>
+            <select id="task-assign-to" style="min-width:180px;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06)"></select>
+          </div>
+
+          <div style="display:flex;gap:12px;align-items:center">
+            <label style="min-width:60px">Description</label>
+            <input id="task-desc" style="flex:1; padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.06)" />
+            <label style="min-width:60px">Group (optional)</label>
+            <select id="task-group" style="min-width:220px;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06)"></select>
+          </div>
+
+          <div style="display:flex;gap:12px;align-items:center">
+            <label style="min-width:60px">Due date</label>
+            <input id="task-due-date" type="date" style="padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.06)" />
+          </div>
+
+          <div style="display:flex;justify-content:flex-end;gap:12px;margin-top:12px">
+            <button id="create-task-cancel" class="btn btn--outline">Cancel</button>
+            <button id="create-task-confirm" class="btn btn--primary">Create Task</button>
+          </div>
+        </div>
+      `;
+
+      // After injecting the modal content, populate selects and hook buttons
+      const assignToSelect = Utils.$('task-assign-to');
+      const groupSelect = Utils.$('task-group');
+      const dueDateInput = Utils.$('task-due-date');
+
+      // Populate assignTo dropdown
+      if (assignToSelect) {
+        Utils.clearElement(assignToSelect);
+        const activeUsers = this.dataStore.getActiveUsers();
+        activeUsers.forEach(user => {
+          const option = document.createElement('option');
+          option.value = user.id;
+          option.textContent = user.username;
+          assignToSelect.appendChild(option);
+        });
+      }
+
+      // Populate group dropdown (include an empty option for DM creation behavior)
+      if (groupSelect) {
+        Utils.clearElement(groupSelect);
+        
+        const noGroupOption = document.createElement('option');
+        noGroupOption.value = '';
+        noGroupOption.textContent = '(no group - create/reuse DM)';
+        groupSelect.appendChild(noGroupOption);
+
+        const currentUser = this.authManager.getCurrentUser();
+        const userGroups = currentUser ? this.dataStore.getUserGroups(currentUser.id) : [];
+        userGroups.forEach(group => {
+          const option = document.createElement('option');
+          option.value = group.id;
+          option.textContent = group.name;
+          groupSelect.appendChild(option);
+        });
+      }
+
+      // Ensure mention-select (if present) is multiple
+      const mentionSelect = Utils.$('mention-select');
+      if (mentionSelect) mentionSelect.multiple = true;
+
+      // Hook interlinking behavior:
+      const interlink = () => {
+        const currentUser = this.authManager.getCurrentUser();
+        if (!currentUser) return;
+
+        // When an assignee is chosen, filter group options to groups both belong to
+        assignToSelect?.addEventListener('change', () => {
+          const assigneeId = assignToSelect.value;
+          if (!groupSelect) return;
+
+          // rebuild group list: include empty option and only groups where both are members
+          Utils.clearElement(groupSelect);
+          const noGroupOption = document.createElement('option');
+          noGroupOption.value = '';
+          noGroupOption.textContent = '(no group - create/reuse DM)';
+          groupSelect.appendChild(noGroupOption);
+
+          const possibleGroups = this.dataStore.getAllGroups().filter(g => {
+            const members = g.members || [];
+            return members.includes(currentUser.id) && members.includes(assigneeId);
+          });
+
+          possibleGroups.forEach(g => {
+            const option = document.createElement('option');
+            option.value = g.id;
+            option.textContent = g.name;
+            groupSelect.appendChild(option);
+          });
+        });
+
+        // When a group is selected, filter the assignee dropdown to its members
+        groupSelect?.addEventListener('change', () => {
+          const groupId = groupSelect.value;
+          if (!assignToSelect) return;
+
+          Utils.clearElement(assignToSelect);
+          if (!groupId) {
+            // restore all active users
+            const activeUsers = this.dataStore.getActiveUsers();
+            activeUsers.forEach(user => {
+              const option = document.createElement('option');
+              option.value = user.id;
+              option.textContent = user.username;
+              assignToSelect.appendChild(option);
+            });
+            return;
+          }
+
+          const group = this.dataStore.getGroup(groupId);
+          if (group) {
+            (group.members || []).forEach(memberId => {
+              const user = this.dataStore.getUser(memberId);
+              const option = document.createElement('option');
+              option.value = memberId;
+              option.textContent = user?.username || memberId;
+              assignToSelect.appendChild(option);
+            });
+          }
+        });
+      };
+
+      interlink();
+
+      // Hook cancel/confirm (setupModalButtons may not have found these earlier if not present)
+      const confirmBtn = Utils.$('create-task-confirm');
+      const cancelBtn = Utils.$('create-task-cancel');
+      if (confirmBtn) confirmBtn.addEventListener('click', () => this.handleCreateTask());
+      if (cancelBtn) cancelBtn.addEventListener('click', () => Utils.hideElement(modal));
+      Utils.showElement(modal);
+    } else {
+      Utils.showToast('Create Task modal not found', 'error');
     }
-
-    // Populate group dropdown
-    if (groupSelect) {
-      Utils.clearElement(groupSelect);
-      
-      const noGroupOption = document.createElement('option');
-      noGroupOption.value = '';
-      noGroupOption.textContent = '(no group - personal)';
-      groupSelect.appendChild(noGroupOption);
-
-      const currentUser = this.authManager.getCurrentUser();
-      const userGroups = currentUser ? this.dataStore.getUserGroups(currentUser.id) : [];
-      userGroups.forEach(group => {
-        const option = document.createElement('option');
-        option.value = group.id;
-        option.textContent = group.name;
-        groupSelect.appendChild(option);
-      });
-    }
-
-    Utils.showElement(modal);
   }
 
   async handleCreateTask() {
@@ -1373,24 +1641,68 @@ class ModalManager {
     const descInput = Utils.$('task-desc');
     const assignToSelect = Utils.$('task-assign-to');
     const groupSelect = Utils.$('task-group');
-    const privateCheckbox = Utils.$('task-private');
-    const dueDateInput = Utils.$('task-due-date'); // optional
+    const dueDateInput = Utils.$('task-due-date');
     const modal = Utils.$('modal-create-task');
 
     const title = titleInput?.value.trim();
     const description = descInput?.value.trim();
     const assignedTo = assignToSelect?.value;
-    const groupId = groupSelect?.value || null;
-    const isPrivate = privateCheckbox?.checked;
+    let groupId = groupSelect?.value || null;
     const dueDateRaw = dueDateInput?.value?.trim();
     const dueDate = dueDateRaw ? new Date(dueDateRaw).toISOString() : null;
 
     if (!title || !assignedTo) {
-      Utils.showToast('Please fill in all required fields', 'error');
+      Utils.showToast('Please fill in title and assignee', 'error');
       return;
     }
 
     try {
+      // If no group chosen, create or reuse a DM between assigner and assignee
+      const assignerId = this.authManager.getCurrentUser().id;
+      if (!groupId) {
+        // find existing DM
+        const existingDM = this.dataStore.getAllGroups().find(g => {
+          if (g.type !== 'dm') return false;
+          const members = g.members || [];
+          return members.includes(assignerId) && members.includes(assignedTo) && members.length === 2;
+        });
+
+        if (existingDM) {
+          groupId = existingDM.id;
+        } else {
+          // create new DM and update both users' groups
+          const otherUser = this.dataStore.getUser(assignedTo);
+          const dmData = {
+            name: `DM: ${otherUser?.username || assignedTo}`,
+            members: [assignerId, assignedTo],
+            admins: [],
+            type: 'dm',
+            createdAt: new Date().toISOString()
+          };
+          const dmRef = await this.firebase.addDoc('groups', dmData);
+
+          // update each user's groups array (best-effort)
+          for (const userId of [assignerId, assignedTo]) {
+            try {
+              const userDoc = await this.firebase.getDoc('users', userId);
+              if (userDoc.exists()) {
+                const userData = userDoc.data();
+                const userGroups = userData.groups || [];
+                if (!userGroups.includes(dmRef.id)) {
+                  await this.firebase.updateDoc('users', userId, {
+                    groups: [...userGroups, dmRef.id]
+                  });
+                }
+              }
+            } catch (err) {
+              console.warn('Failed to update user groups for DM:', err);
+            }
+          }
+
+          groupId = dmRef.id;
+        }
+      }
+
       const taskData = {
         title,
         description,
@@ -1399,16 +1711,18 @@ class ModalManager {
         status: 'in-progress',
         priority: 'medium',
         dueDate: dueDate,
-        groupId: isPrivate ? null : groupId,
-        private: !!isPrivate,
+        groupId: groupId,
+        private: false,
         archived: false,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        completedAt: null,
+        completedBy: null
       };
 
       const taskRef = await this.firebase.addDoc('tasks', taskData);
 
-      // Create notification message
-      if (!isPrivate && groupId) {
+      // Create notification message in the group so there is a message link as well
+      if (groupId) {
         let content = `Task assigned: ${title}`;
         if (dueDate) content += ` (due ${Utils.formatDateShort(dueDate)})`;
         await this.firebase.addDoc('messages', {
@@ -1419,20 +1733,6 @@ class ModalManager {
           parentMessageId: null,
           taskId: taskRef.id,
           timestamp: new Date().toISOString()
-        });
-      } else {
-        const assignedUser = this.dataStore.getUser(assignedTo);
-        let content = `Private task for ${assignedUser?.username || assignedTo}: ${title}`;
-        if (dueDate) content += ` (due ${Utils.formatDateShort(dueDate)})`;
-        await this.firebase.addDoc('messages', {
-          groupId: null,
-          userId: this.authManager.getCurrentUser().id,
-          content,
-          type: 'private-task',
-          parentMessageId: null,
-          taskId: taskRef.id,
-          timestamp: new Date().toISOString(),
-          mentions: [assignedTo]
         });
       }
 
@@ -1504,6 +1804,25 @@ class ModalManager {
       };
 
       const dmRef = await this.firebase.addDoc('groups', dmData);
+
+      // update user records (best-effort)
+      for (const userId of [currentUserId, otherUserId]) {
+        try {
+          const userDoc = await this.firebase.getDoc('users', userId);
+          if (userDoc.exists()) {
+            const userData = userDoc.data();
+            const userGroups = userData.groups || [];
+            if (!userGroups.includes(dmRef.id)) {
+              await this.firebase.updateDoc('users', userId, {
+                groups: [...userGroups, dmRef.id]
+              });
+            }
+          }
+        } catch (err) {
+          console.warn('Failed to update user groups for DM creation:', err);
+        }
+      }
+
       Utils.hideElement(modal);
       window.app.openGroup(dmRef.id);
       Utils.showToast('Direct message created', 'success');
@@ -1620,6 +1939,7 @@ class TaskFlowApp {
         break;
       case 'groupChat':
         if (this.currentGroup) {
+          // Render tasks for group then messages
           this.uiRenderer.renderChat(this.currentGroup.id);
           this.populateMentionSelect();
         }
@@ -1695,6 +2015,7 @@ class TaskFlowApp {
             membersCount.textContent = `${(this.currentGroup.members || []).length} members`;
           }
           this.populateMentionSelect();
+          this.uiRenderer.renderGroupTasks(this.currentGroup.id);
         }
       }
     }
@@ -1704,6 +2025,10 @@ class TaskFlowApp {
       this.uiRenderer.renderAssignedByMe();
       if (this.authManager.isDirector()) {
         this.uiRenderer.renderDirectorTasks();
+      }
+      // If viewing a group, re-render group tasks to remove completed ones
+      if (this.currentGroup && currentView === 'groupChat') {
+        this.uiRenderer.renderGroupTasks(this.currentGroup.id);
       }
     }
     
@@ -1792,6 +2117,7 @@ class TaskFlowApp {
     if (!mentionSelect || !this.currentGroup) return;
 
     Utils.clearElement(mentionSelect);
+    mentionSelect.multiple = true;
     
     (this.currentGroup.members || []).forEach(memberId => {
       const user = this.dataStore.getUser(memberId);
@@ -1802,6 +2128,7 @@ class TaskFlowApp {
     });
   }
 
+  // When sending messages into a group: create both message and a corresponding group task
   async sendMessage() {
     if (!this.currentGroup) {
       Utils.showToast('Open a group first', 'error');
@@ -1823,7 +2150,8 @@ class TaskFlowApp {
     );
 
     try {
-      await this.firebase.addDoc('messages', {
+      // Save the message first
+      const messageRef = await this.firebase.addDoc('messages', {
         groupId: this.currentGroup.id,
         userId: this.authManager.getCurrentUser().id,
         content: messageText,
@@ -1834,8 +2162,31 @@ class TaskFlowApp {
         mentions: allowedMentions
       });
 
+      // Automatically create a task from the message in the group (pending, visible to group)
+      // We'll use a small title derived from the message to make it actionable
+      const title = messageText.length > 80 ? (messageText.slice(0, 77) + '...') : messageText;
+      const taskData = {
+        title,
+        description: messageText,
+        assignedBy: this.authManager.getCurrentUser().id,
+        assignedTo: null, // unassigned so anyone can complete
+        status: 'in-progress',
+        priority: 'low',
+        dueDate: null,
+        groupId: this.currentGroup.id,
+        private: false,
+        archived: false,
+        createdAt: new Date().toISOString(),
+        completedAt: null,
+        completedBy: null
+      };
+
+      await this.firebase.addDoc('tasks', taskData);
+
       if (chatInput) chatInput.value = '';
       if (mentionSelect) mentionSelect.selectedIndex = -1;
+
+      // No extra notification: mentions are already saved on the message and will appear in UI
 
     } catch (error) {
       console.error('Send message failed:', error);
@@ -1891,11 +2242,68 @@ class TaskFlowApp {
     }
   }
 
+  // For group tasks (or message-created tasks), allow completion by group members
+  async completeTaskFromMessage(taskId) {
+    try {
+      const task = this.dataStore.getTask(taskId);
+      if (!task) {
+        Utils.showToast('Task not found', 'error');
+        return;
+      }
+
+      const currentUser = this.authManager.getCurrentUser();
+      if (!currentUser) {
+        Utils.showToast('Login required', 'error');
+        return;
+      }
+
+      // If attached to group, ensure current user is a member (any member may complete)
+      if (task.groupId) {
+        const group = this.dataStore.getGroup(task.groupId);
+        if (!group || !(group.members || []).includes(currentUser.id)) {
+          Utils.showToast('Only group members can complete this task', 'error');
+          return;
+        }
+      } else {
+        // personal or DM tasks: allow if assignedTo or in DM participants
+        if (task.assignedTo && task.assignedTo !== currentUser.id) {
+          Utils.showToast('Only the assigned user can complete this personal task', 'error');
+          return;
+        }
+      }
+
+      await this.firebase.updateDoc('tasks', taskId, {
+        status: 'completed',
+        completedAt: new Date().toISOString(),
+        completedBy: currentUser.id
+      });
+
+      // If this was a group task, post a completion message to the group (optional)
+      if (task.groupId) {
+        await this.firebase.addDoc('messages', {
+          groupId: task.groupId,
+          userId: currentUser.id,
+          content: `Task completed: ${task.title}`,
+          type: 'task-completed',
+          parentMessageId: null,
+          taskId,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      Utils.showToast('Task marked completed', 'success');
+    } catch (error) {
+      console.error('Complete task from message failed:', error);
+      Utils.showToast('Failed to complete task', 'error');
+    }
+  }
+
   async uncompleteTask(taskId) {
     try {
       await this.firebase.updateDoc('tasks', taskId, {
         status: 'in-progress',
-        completedAt: null
+        completedAt: null,
+        completedBy: null
       });
       Utils.showToast('Task restored', 'success');
     } catch (error) {
