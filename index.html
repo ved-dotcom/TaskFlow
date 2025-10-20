@@ -53,31 +53,36 @@
     <!-- Views container -->
     <section class="content">
 
-      <!-- Dashboard view -->
+      <!-- Dashboard view (3 columns: Groups | Active Tasks | Recently Completed) -->
       <section id="dashboard-view" class="view active">
-        <div class="cols">
-          <div class="col col-left">
-            <h3>Groups</h3>
-            <div id="groups-col" class="stack"></div>
+        <div style="display:flex;gap:12px;align-items:start">
+          <!-- Groups column (collapsible) -->
+          <div style="width:28%; min-width:220px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <h3 style="margin:0">Groups</h3>
+              <button id="toggle-groups-col" class="btn btn--outline btn--small" title="Collapse">–</button>
+            </div>
+            <div id="groups-col" class="stack card" style="padding:12px;"></div>
           </div>
 
-          <div class="col col-center">
-            <h3>Tasks</h3>
+          <!-- Active Tasks column (collapsible) -->
+          <div style="flex:1; min-width:300px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <h3 style="margin:0">Active Tasks</h3>
+              <div style="display:flex;gap:8px;align-items:center">
+                <button id="toggle-active-tasks-col" class="btn btn--outline btn--small" title="Collapse">–</button>
+              </div>
+            </div>
             <div id="tasks-col" class="stack"></div>
           </div>
 
-          <div class="col col-right">
-            <h3>Tasks you assigned</h3>
-            <div id="assigned-by-me-col" class="stack"></div>
-          </div>
-
-          <div class="col col-far-right">
-            <h3>Mentions</h3>
-            <div id="mentions-col" class="stack"></div>
-            <div style="margin-top:12px;display:flex;gap:8px">
-              <button id="show-completed" class="btn btn--outline small">Show Completed</button>
-              <button id="show-archived" class="btn btn--outline small">Show Archived</button>
+          <!-- Recently Completed column (collapsible) -->
+          <div style="width:28%; min-width:220px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <h3 style="margin:0">Recently Completed</h3>
+              <button id="toggle-completed-col" class="btn btn--outline btn--small" title="Collapse">–</button>
             </div>
+            <div id="completed-tasks-col" class="stack card" style="padding:12px;"></div>
           </div>
         </div>
       </section>
@@ -90,7 +95,7 @@
         <div id="groups-list" class="list"></div>
       </section>
 
-      <!-- Group chat view -->
+      <!-- Group chat view (group tasks shown above messages) -->
       <section id="group-chat-view" class="view">
         <div class="chat-header">
           <div>
@@ -98,10 +103,12 @@
             <div id="chat-members-count" class="muted">0 members</div>
           </div>
           <div>
-            <button id="show-members-btn" class="btn btn--outline">Show members</button>
             <button id="back-to-groups" class="btn btn--outline">Back</button>
           </div>
         </div>
+
+        <!-- Pending group tasks (renders by UI renderer) -->
+        <div id="group-tasks-list" class="stack" style="margin-bottom:12px;"></div>
 
         <div id="chat-messages" class="chat-messages"></div>
 
@@ -112,7 +119,7 @@
         </div>
       </section>
 
-      <!-- Admin view -->
+      <!-- Admin view (UI only — visibility restricted in JS to Directors) -->
       <section id="admin-view" class="view">
         <h2>Admin</h2>
         <div class="admin-grid">
@@ -124,12 +131,13 @@
             <h3>Manage Users</h3>
             <div id="user-list" class="list"></div>
           </div>
-          <div>
-            <h3>Director - Remaining Tasks</h3>
-            <div id="director-tasks-list" class="list"></div>
-          </div>
         </div>
       </section>
+      <!-- inside admin-view (add this snippet somewhere in that section) -->
+<div style="margin-top:16px">
+  <h3>All Active Tasks (Director)</h3>
+  <div id="director-tasks-list" class="list"></div>
+</div>
 
       <!-- Profile view -->
       <section id="profile-view" class="view">
@@ -143,7 +151,7 @@
   </div>
 
   <!-- ==========================
-       MODALS (hidden by default)
+       MODALS (containers; contents injected by JS where noted)
        ========================== -->
 
   <!-- Create Group modal -->
@@ -170,33 +178,10 @@
     </div>
   </div>
 
-  <!-- Create Task modal -->
+  <!-- Create Task modal (content injected by JS) -->
   <div id="modal-create-task" class="modal hidden" role="dialog" aria-hidden="true">
-    <div class="modal-body card">
-      <h3>Create Task</h3>
-      <label>Title
-        <input id="task-title" type="text" />
-      </label>
-      <label>Description
-        <textarea id="task-desc"></textarea>
-      </label>
-      <label>Assign to
-        <select id="task-assign-to"></select>
-      </label>
-      <label>Group
-        <select id="task-group"></select>
-      </label>
-      <label>Due date
-        <input id="task-due-date" type="date" />
-      </label>
-      <label style="display:flex;gap:8px;align-items:center">
-        <input id="task-private" type="checkbox" /> Private (not attached to group)
-      </label>
-      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
-        <button id="create-task-cancel" class="btn btn--outline">Cancel</button>
-        <button id="create-task-confirm" class="btn btn--primary">Create Task</button>
-      </div>
-    </div>
+    <!-- innerHTML is injected from app.js; keep this container present -->
+    <div class="modal-body card"></div>
   </div>
 
   <!-- Create DM modal -->
@@ -228,9 +213,8 @@
     </div>
   </div>
 
-  <!-- Toast container created dynamically by JS -->
+  <!-- Toast container is created dynamically by JS -->
 
-  <!-- Include your app.js (make sure path is correct) -->
   <script type="module" src="app.js"></script>
 </body>
 </html>
