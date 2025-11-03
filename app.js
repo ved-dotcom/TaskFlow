@@ -5,6 +5,8 @@
 //      that any group member can complete (no per-member tasks).
 //   2) Collapse buttons fixed (use style.display toggling).
 // - All other logic preserved.
+// - Added: "Tasks assigned by you" column in profile view (active tasks only).
+// - Added: hide "all active tasks" from non-directors in profile (director-only).
 // ============================================================================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
@@ -439,6 +441,41 @@ class UIRenderer {
     if (!user) return;
     Utils.safeText(Utils.$('profile-username'), user.username);
     Utils.safeText(Utils.$('profile-role'), user.role);
+
+    // New: Render a "Tasks assigned by you" column in profile view that shows only active tasks
+    const assignedByMeContainer = Utils.$('profile-assigned-by-me-col');
+    if (assignedByMeContainer) {
+      Utils.clearElement(assignedByMeContainer);
+
+      const assignedTasks = this.dataStore.getTasksAssignedBy(user.id)
+        .filter(t => t.assignedTo && t.assignedTo !== user.id) // tasks assigned to others
+        .filter(t => !t.archived && t.status !== 'completed'); // only active tasks
+
+      if (assignedTasks.length === 0) {
+        assignedByMeContainer.innerHTML = '<p class="muted">You have not assigned any active tasks.</p>';
+      } else {
+        const header = document.createElement('div');
+        header.className = 'card';
+        header.innerHTML = '<strong>Tasks assigned by you</strong>';
+        assignedByMeContainer.appendChild(header);
+
+        assignedTasks.forEach(task => {
+          const card = this.createAssignedByMeCard(task);
+          assignedByMeContainer.appendChild(card);
+        });
+      }
+    }
+
+    // Remove "all active tasks" from profile for non-directors.
+    // If an element exists in the profile area with id 'profile-all-active-tasks', only show it to directors.
+    const profileAllActiveEl = Utils.$('profile-all-active-tasks');
+    if (profileAllActiveEl) {
+      if (this.authManager.isDirector()) {
+        profileAllActiveEl.style.display = ''; // visible for directors
+      } else {
+        profileAllActiveEl.style.display = 'none';
+      }
+    }
   }
 
   renderDashboardGroups() {
@@ -694,7 +731,9 @@ class UIRenderer {
           }
 
           const now = new Date().toISOString();
-          const entryText = subtasksLocal[idx] ? `${this.authManager.getCurrentUser().username} ${completed ? 'completed' : 'reopened'} subtask "${subtasksLocal[idx].title}"` : `${this.authManager.getCurrentUser().username} updated a subtask`;
+          const entryText = (idx !== -1 && subtasksLocal[idx])
+            ? `${this.authManager.getCurrentUser().username} ${completed ? 'completed' : 'reopened'} subtask "${subtasksLocal[idx].title}"`
+            : `${this.authManager.getCurrentUser().username} updated a subtask`;
           const entry = { ts: now, text: entryText };
 
           const updated = {
