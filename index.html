@@ -4,217 +4,239 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>TaskFlow</title>
-  <link rel="stylesheet" href="style.css" />
+  <style>
+    /* Minimal neutral styling so the UI is usable out-of-the-box */
+    :root {
+      --bg: #0f1724;
+      --card: #071126;
+      --muted: #9aa4b2;
+      --accent: #0ea5a4;
+      --danger: #ef4444;
+      --surface: rgba(255,255,255,0.03);
+      --text: #e6eef6;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }
+    html,body { height:100%; margin:0; background: linear-gradient(180deg,#071024 0%, #07112a 100%); color:var(--text); }
+    .app { display:flex; flex-direction:column; min-height:100vh; }
+    header { display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid rgba(255,255,255,0.03); }
+    header .brand { font-weight:700; letter-spacing:0.6px; }
+    header .nav { display:flex; gap:8px; align-items:center; }
+    .nav button { background:transparent;border:1px solid rgba(255,255,255,0.04); color:var(--text); padding:8px 10px;border-radius:8px; cursor:pointer; }
+    .container { display:flex; gap:12px; padding:16px; align-items:flex-start; flex:1; }
+    .col { flex:1; min-width:260px; }
+    .col.small { flex:0 0 300px; }
+    .card { background: var(--card); border-radius:10px; padding:12px; box-shadow: 0 6px 20px rgba(0,0,0,0.4); margin-bottom:12px; }
+    .muted { color: var(--muted); font-size:13px; }
+    .btn { padding:8px 12px; border-radius:8px; cursor:pointer; border:0; }
+    .btn--primary { background: var(--accent); color: white; }
+    .btn--outline { background: transparent; color: var(--text); border:1px solid rgba(255,255,255,0.06); }
+    .btn--danger { background: var(--danger); color:white; }
+    .btn--small { padding:6px 8px; font-size:13px; border-radius:6px; }
+    .hidden { display:none !important; }
+    .top-actions { display:flex; gap:8px; align-items:center; }
+    .modal { position:fixed; left:0; top:0; right:0; bottom:0; background:rgba(1,6,12,0.6); display:flex;align-items:center;justify-content:center; z-index:1000; }
+    .modal .modal-content { background:var(--card); border-radius:10px; padding:12px; width:800px; max-width:95%; color:var(--text); }
+    input, select, textarea { background:transparent; border:1px solid rgba(255,255,255,0.05); padding:8px; color:var(--text); border-radius:6px; }
+    label { font-size:13px; color:var(--muted); }
+    .header-row { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+    .toolbar { display:flex; gap:8px; align-items:center; }
+    .grid-2 { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+    .card-list { display:flex; flex-direction:column; gap:8px; }
+    .message { background: var(--surface); padding:8px; border-radius:8px; margin-bottom:8px; }
+    .message .meta { font-size:12px; color:var(--muted); margin-bottom:6px; }
+    .task-urgent { border-left:4px solid #f97316; padding-left:8px; }
+    /* small helpers */
+    .right { margin-left:auto; }
+    footer { padding:12px 20px; border-top:1px solid rgba(255,255,255,0.02); color:var(--muted); font-size:13px; }
+    .badge-urgent { background:#f97316; color:white; padding:4px 8px; border-radius:999px; font-size:12px; margin-left:8px; }
+  </style>
 </head>
 <body>
-  <!-- Top header -->
-  <header class="topbar">
-    <div class="brand">TaskFlow</div>
-    <div class="top-actions">
-      <button id="back-btn" class="btn btn--outline hidden">← Back</button>
-      <button id="refresh-btn" class="btn btn--outline">⟳ Refresh</button>
-      <button id="new-dm-btn" class="btn btn--outline">New DM</button>
-      <button id="create-task-btn" class="btn btn--primary">New Task</button>
-      <button id="create-group-btn" class="btn btn--primary hidden">Create Group</button>
-      <button id="logout-btn" class="btn btn--danger hidden">Logout</button>
-    </div>
-  </header>
+  <div class="app">
+    <header>
+      <div class="brand">TaskFlow</div>
+      <div class="nav">
+        <div class="top-actions">
+          <button id="nav-dashboard" class="btn">Dashboard</button>
+          <button id="nav-groups" class="btn">Groups</button>
+          <button id="nav-admin" class="btn hidden">Admin</button>
+          <button id="nav-profile" class="btn">Profile</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-left:12px">
+          <button id="refresh-btn" class="btn btn--outline">Refresh</button>
+          <button id="create-task-btn" class="btn btn--primary">Create Task</button>
+          <button id="create-group-btn" class="btn btn--outline hidden">Create Group</button>
+          <button id="new-dm-btn" class="btn btn--outline">New DM</button>
+          <button id="logout-btn" class="btn btn--outline hidden">Logout</button>
+        </div>
+      </div>
+    </header>
 
-  <!-- Login screen -->
-  <main id="login-view" class="center-screen">
-    <div class="card login-card">
+    <!-- LOGIN VIEW -->
+    <div id="login-view" class="card" style="margin:20px auto; max-width:420px;">
       <h2>Welcome to TaskFlow</h2>
-      <label>Username
-        <input id="login-username" type="text" autocomplete="username" />
-      </label>
-      <label>Password
-        <input id="login-password" type="password" autocomplete="current-password" />
-      </label>
-      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
-        <button id="show-register" class="btn btn--outline">Register</button>
-        <button id="login-btn" class="btn btn--primary">Login</button>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+        <input id="login-username" placeholder="Username" />
+        <input id="login-password" placeholder="Password" type="password" />
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button id="show-register" class="btn btn--outline">Register</button>
+          <button id="login-btn" class="btn btn--primary">Login</button>
+        </div>
       </div>
     </div>
-  </main>
 
-  <!-- Main app -->
-  <div id="app-view" class="app hidden">
-    <!-- Nav -->
-    <nav class="sidebar">
-      <div class="nav-group">
-        <button id="nav-dashboard" class="nav-btn btn btn--outline">Dashboard</button>
-        <button id="nav-groups" class="nav-btn btn btn--outline">Groups</button>
-        <button id="nav-admin" class="nav-btn btn btn--outline hidden">Admin</button>
-        <button id="nav-profile" class="nav-btn btn btn--outline">Profile</button>
+    <!-- MAIN APP VIEW -->
+    <main id="app-view" class="hidden" style="flex:1; display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:center; gap:12px; padding:12px 16px;">
+        <button id="back-btn" class="btn btn--outline hidden">Back</button>
+        <div class="toolbar">
+          <button id="toggle-groups-col" class="btn btn--outline">–</button>
+          <button id="toggle-active-tasks-col" class="btn btn--outline">–</button>
+          <button id="toggle-completed-col" class="btn btn--outline">–</button>
+        </div>
+        <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+          <div id="user-info" class="muted">Not logged in</div>
+        </div>
       </div>
-      <div class="nav-footer muted">TaskFlow • Lightweight</div>
-    </nav>
 
-    <!-- Views container -->
-    <section class="content">
-
-      <!-- Dashboard view (3 columns: Groups | Active Tasks | Recently Completed) -->
-      <section id="dashboard-view" class="view active">
-        <div style="display:flex;gap:12px;align-items:start">
-          <!-- Groups column (collapsible) -->
-          <div style="width:28%; min-width:220px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-              <h3 style="margin:0">Groups</h3>
-              <button id="toggle-groups-col" class="btn btn--outline btn--small" title="Collapse">–</button>
+      <div class="container">
+        <!-- Left: Groups column -->
+        <aside class="col small">
+          <div id="groups-col" class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <strong>Groups</strong>
+              <button id="show-members-btn" class="btn btn--small btn--outline">Members</button>
             </div>
-            <div id="groups-col" class="stack card" style="padding:12px;"></div>
+            <div id="groups-list" style="margin-top:12px"></div>
           </div>
 
-          <!-- Active Tasks column (collapsible) -->
-          <div style="flex:1; min-width:300px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-              <h3 style="margin:0">Active Tasks</h3>
-              <div style="display:flex;gap:8px;align-items:center">
-                <button id="toggle-active-tasks-col" class="btn btn--outline btn--small" title="Collapse">–</button>
-              </div>
+          <div id="assigned-by-me-col" class="card">
+            <strong>Your assigned tasks</strong>
+            <div id="assigned-by-me-col-list" style="margin-top:8px"></div>
+          </div>
+
+          <div id="director-tasks-list" class="card hidden"></div>
+        </aside>
+
+        <!-- Middle: Active tasks -->
+        <section class="col" style="flex:2;">
+          <div id="tasks-col" class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <strong>Active tasks</strong>
+              <div class="muted" id="tasks-meta"></div>
             </div>
-            <div id="tasks-col" class="stack"></div>
+            <div id="tasks-list" style="margin-top:12px"></div>
           </div>
 
-          <!-- Recently Completed column (collapsible) -->
-          <div style="width:28%; min-width:220px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-              <h3 style="margin:0">Recently Completed</h3>
-              <button id="toggle-completed-col" class="btn btn--outline btn--small" title="Collapse">–</button>
+          <div id="completed-tasks-col" class="card">
+            <strong>Completed tasks</strong>
+            <div id="completed-tasks-list" style="margin-top:8px"></div>
+          </div>
+        </section>
+
+        <!-- Right: Chat / profile -->
+        <aside class="col small">
+          <div id="profile-view" class="card">
+            <div id="profile-header" style="display:flex;flex-direction:column;gap:6px">
+              <h3 id="profile-username">—</h3>
+              <div id="profile-role" class="muted">role</div>
             </div>
-            <div id="completed-tasks-col" class="stack card" style="padding:12px;"></div>
+
+            <!-- injected "Tasks assigned by you" will go here if not found -->
+            <div id="profile-assigned-by-you"></div>
+
+            <div style="margin-top:12px">
+              <button id="back-to-groups" class="btn btn--outline btn--small">Back to Groups</button>
+            </div>
           </div>
-        </div>
-      </section>
 
-      <!-- Groups list view -->
-      <section id="groups-view" class="view">
-        <div class="view-header">
-          <h2>Groups</h2>
-        </div>
-        <div id="groups-list" class="list"></div>
-      </section>
+          <div id="group-chat-preview" class="card" style="margin-top:12px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <strong id="chat-group-name">No group</strong>
+              <span id="chat-members-count" class="muted">0 members</span>
+            </div>
+            <div id="chat-messages" style="margin-top:10px; max-height:260px; overflow:auto;"></div>
 
-      <!-- Group chat view (group tasks shown above messages) -->
-      <section id="group-chat-view" class="view">
-        <div class="chat-header">
-          <div>
-            <h2 id="chat-group-name">Group Name</h2>
-            <div id="chat-members-count" class="muted">0 members</div>
+            <div style="display:flex;gap:8px;margin-top:10px">
+              <select id="mention-select" multiple style="flex:1;min-height:36px"></select>
+              <input id="chat-input" placeholder="Message..." style="flex:2" />
+              <button id="send-msg" class="btn btn--primary">Send</button>
+            </div>
           </div>
-          <div>
-            <button id="back-to-groups" class="btn btn--outline">Back</button>
-          </div>
-        </div>
-
-        <!-- Pending group tasks (renders by UI renderer) -->
-        <div id="group-tasks-list" class="stack" style="margin-bottom:12px;"></div>
-
-        <div id="chat-messages" class="chat-messages"></div>
-
-        <div class="chat-input-row">
-          <select id="mention-select" multiple class="mention-select"></select>
-          <input id="chat-input" type="text" placeholder="Write a message..." />
-          <button id="send-msg" class="btn btn--primary">Send</button>
-        </div>
-      </section>
-
-      <!-- Admin view (UI only — visibility restricted in JS to Directors) -->
-      <section id="admin-view" class="view">
-        <h2>Admin</h2>
-        <div class="admin-grid">
-          <div>
-            <h3>Pending Approvals</h3>
-            <div id="pending-users-list" class="list"></div>
-          </div>
-          <div>
-            <h3>Manage Users</h3>
-            <div id="user-list" class="list"></div>
-          </div>
-        </div>
-      </section>
-      <!-- inside admin-view (add this snippet somewhere in that section) -->
-<div style="margin-top:16px">
-  <h3>All Active Tasks (Director)</h3>
-  <div id="director-tasks-list" class="list"></div>
-</div>
-
-      <!-- Profile view -->
-      <section id="profile-view" class="view">
-        <h2>My Profile</h2>
-        <div class="card">
-          <div><strong id="profile-username">—</strong></div>
-          <div class="muted" id="profile-role">—</div>
-        </div>
-      </section>
-    </section>
-  </div>
-
-  <!-- ==========================
-       MODALS (containers; contents injected by JS where noted)
-       ========================== -->
-
-  <!-- Create Group modal -->
-  <div id="modal-create-group" class="modal hidden" role="dialog" aria-hidden="true">
-    <div class="modal-body card">
-      <h3>Create Group</h3>
-      <label>Group name
-        <input id="group-name" type="text" />
-      </label>
-      <div style="display:flex;gap:12px;margin-top:8px">
-        <div style="flex:1">
-          <h4>Members</h4>
-          <div id="members-checkboxes" class="modal-list"></div>
-        </div>
-        <div style="flex:1">
-          <h4>Admins</h4>
-          <div id="admins-checkboxes" class="modal-list"></div>
-        </div>
+        </aside>
       </div>
-      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
-        <button id="create-group-cancel" class="btn btn--outline">Cancel</button>
-        <button id="create-group-confirm" class="btn btn--primary">Create</button>
+
+      <footer>
+        TaskFlow — small, capable task manager.
+      </footer>
+    </main>
+
+    <!-- ADMIN VIEW (hidden by default) -->
+    <div id="admin-view" class="card hidden" style="margin:20px;">
+      <h3>Admin</h3>
+      <div id="pending-users-list" style="margin-top:8px"></div>
+      <div id="user-list" style="margin-top:12px"></div>
+    </div>
+
+    <!-- GROUP CHAT VIEW (hidden, reused when openGroup) -->
+    <div id="group-chat-view" class="card hidden" style="margin:20px;">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h3 id="chat-group-name-2">Group</h3>
+        <div id="chat-members-count-2" class="muted">0 members</div>
+      </div>
+      <div id="group-tasks-list" style="margin-top:12px"></div>
+      <div id="chat-messages-2" style="margin-top:12px;"></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <select id="mention-select-2" multiple style="flex:1"></select>
+        <input id="chat-input-2" placeholder="Message..." style="flex:2" />
+        <button id="send-msg-2" class="btn btn--primary">Send</button>
       </div>
     </div>
-  </div>
 
-  <!-- Create Task modal (content injected by JS) -->
-  <div id="modal-create-task" class="modal hidden" role="dialog" aria-hidden="true">
-    <!-- innerHTML is injected from app.js; keep this container present -->
-    <div class="modal-body card"></div>
-  </div>
+    <!-- MODALS (hidden by default) -->
+    <div id="modal-create-task" class="modal hidden" aria-hidden="true"></div>
 
-  <!-- Create DM modal -->
-  <div id="modal-create-dm" class="modal hidden" role="dialog" aria-hidden="true">
-    <div class="modal-body card">
-      <h3>Start Direct Message</h3>
-      <label>User
-        <select id="dm-user-select"></select>
-      </label>
-      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
-        <button id="create-dm-cancel" class="btn btn--outline">Cancel</button>
-        <button id="create-dm-confirm" class="btn btn--primary">Start DM</button>
+    <div id="modal-create-group" class="modal hidden" aria-hidden="true">
+      <div class="modal-content">
+        <h3>Create group</h3>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <input id="group-name" placeholder="Group name" />
+          <div>
+            <label>Members</label>
+            <div id="members-checkboxes" style="margin-top:8px;max-height:160px;overflow:auto"></div>
+          </div>
+          <div>
+            <label>Admins</label>
+            <div id="admins-checkboxes" style="margin-top:8px;max-height:160px;overflow:auto"></div>
+          </div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
+            <button id="create-group-cancel" class="btn btn--outline">Cancel</button>
+            <button id="create-group-confirm" class="btn btn--primary">Create</button>
+          </div>
+        </div>
       </div>
     </div>
-  </div>
 
-  <!-- Reply modal (optional) -->
-  <div id="modal-reply" class="modal hidden" role="dialog" aria-hidden="true">
-    <div class="modal-body card">
-      <h3>Reply</h3>
-      <div id="reply-to-message-content" class="muted"></div>
-      <form id="reply-form">
-        <textarea id="reply-input"></textarea>
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
-          <button id="cancel-reply-btn" class="btn btn--outline">Cancel</button>
-          <button type="submit" class="btn btn--primary">Reply</button>
+    <div id="modal-create-dm" class="modal hidden" aria-hidden="true">
+      <div class="modal-content">
+        <h3>Create Direct Message</h3>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <select id="dm-user-select"></select>
+          <div style="display:flex;justify-content:flex-end;gap:8px">
+            <button id="create-dm-cancel" class="btn btn--outline">Cancel</button>
+            <button id="create-dm-confirm" class="btn btn--primary">Create</button>
+          </div>
         </div>
-      </form>
+      </div>
     </div>
+
+    <!-- Optional placeholder for "Tasks you assigned" column (dashboard) -->
+    <div id="tasks-screen" class="hidden"></div>
   </div>
 
-  <!-- Toast container is created dynamically by JS -->
+  <!-- Toast container will be created by Utils.showToast if needed -->
 
+  <!-- App script (module) — ensure this path matches your deployed file name -->
   <script type="module" src="app.js"></script>
 </body>
 </html>
