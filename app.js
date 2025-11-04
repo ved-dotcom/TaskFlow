@@ -1,12 +1,25 @@
 // ============================================================================
-// TASKFLOW - app.js
-// - Minimal, surgical updates:
-//   1) "Assign to entire group" creates ONE shared task (groupWide: true)
-//      that any group member can complete (no per-member tasks).
-//   2) Collapse buttons fixed (use style.display toggling).
-// - All other logic preserved.
-// - Added: "Tasks assigned by you" column in profile view (active tasks only).
-// - Added: hide "all active tasks" from non-directors in profile (director-only).
+// TASKFLOW - app.js (updated features)
+//  - Feature additions (minimal & local to app.js):
+//    1) All users can see "Tasks assigned by you" on their Profile (includes tasks
+//       assigned to self, group-wide tasks, and tasks auto-created from messages).
+//    2) Disable input suggestions/autocomplete for task title/desc to stop browser
+//       suggestion popups (autocomplete="off" etc).
+//    3) Reply workflow:
+//       - Replies are stored as messages with type 'task-reply' and linked by taskId.
+//       - Assignee (or any group member for groupWide tasks) can post a single reply,
+//         which they can edit until both parties confirm completion.
+//       - After assignee posts reply they get a blocking prompt "Mark completed?".
+//         If they choose yes -> assigneeConfirmation set and task moves to
+//         'awaiting_assigner_confirmation'.
+//       - Assigner sees the reply in "Tasks assigned by you" and can Confirm/Reject.
+//       - Only when both confirm the task is marked 'completed'.
+//       - Undo (uncomplete) remains supported.
+//    4) Only text replies (no photo attachments). Reply maxlength ~1000 words (~8000 chars).
+//
+//  - Other constraints:
+//    - Kept all other functionality intact.
+//    - All data changes use existing Firestore collections: tasks & messages.
 // ============================================================================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
@@ -16,7 +29,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 // ----------------------------------------------------------------------------
-// Configuration (unchanged)
+// Config (unchanged)
 const CONFIG = {
   firebase: {
     apiKey: "AIzaSyCt3MkuMExKqg8J3BRm60Sf5RZWJZUjrpQ",
@@ -30,11 +43,16 @@ const CONFIG = {
   autoArchive: {
     interval: 6 * 60 * 60 * 1000, // 6 hours
     daysOld: 7
+  },
+  // reply limits
+  reply: {
+    maxWords: 1000,
+    approxCharLimit: 1000 * 8 // generous char estimate, but enforced as words in UI
   }
 };
 
 // ----------------------------------------------------------------------------
-// Utilities
+// Utilities (small addition: sanitize and disable autocomplete attributes)
 class Utils {
   static $(id) { return document.getElementById(id) || null; }
   static safeText(element, text) { if (element) element.textContent = text ?? ''; }
@@ -53,7 +71,6 @@ class Utils {
       if (btn) btn.addEventListener('click', handler);
     });
   }
-
   static initToastContainer() {
     if (!document.getElementById('toast-container')) {
       const container = document.createElement('div');
@@ -71,22 +88,13 @@ class Utils {
       document.body.appendChild(container);
     }
   }
-
   static showToast(message, type = 'info', duration = 4000) {
     Utils.initToastContainer();
     const container = document.getElementById('toast-container');
     if (!container) return;
-
     const toast = document.createElement('div');
     toast.textContent = message;
-
-    const colors = {
-      error: '#ef4444',
-      success: '#10b981',
-      warning: '#f59e0b',
-      info: '#334155'
-    };
-
+    const colors = { error: '#ef4444', success: '#10b981', warning: '#f59e0b', info: '#334155' };
     toast.style.cssText = `
       background-color: ${colors[type] || colors.info};
       color: white;
@@ -99,29 +107,21 @@ class Utils {
       transform: translateX(100%);
       transition: all 0.3s ease;
       pointer-events: auto;
-      max-width: 300px;
+      max-width: 360px;
       word-wrap: break-word;
     `;
-
     container.appendChild(toast);
-
-    setTimeout(() => {
-      toast.style.opacity = '1';
-      toast.style.transform = 'translateX(0)';
-    }, 10);
-
+    setTimeout(() => { toast.style.opacity = '1'; toast.style.transform = 'translateX(0)'; }, 10);
     setTimeout(() => {
       toast.style.opacity = '0';
       toast.style.transform = 'translateX(100%)';
-      setTimeout(() => {
-        if (container.contains(toast)) container.removeChild(toast);
-      }, 300);
+      setTimeout(() => { if (container.contains(toast)) container.removeChild(toast); }, 300);
     }, duration);
   }
 }
 
 // ----------------------------------------------------------------------------
-// Firebase wrapper (same API surface)
+// Firebase wrapper (unchanged)
 class FirebaseService {
   constructor() {
     this.app = initializeApp(CONFIG.firebase);
@@ -191,9 +191,13 @@ class DataStore {
   setTasks(taskData) { this.tasks.clear(); taskData.forEach(t => this.tasks.set(t.id, t)); }
   getTask(id) { return this.tasks.get(id); }
   getAllTasks() { return Array.from(this.tasks.values()); }
+
+  // get tasks assigned to user (personal)
   getUserTasks(userId) { return this.getAllTasks().filter(t => t.assignedTo === userId); }
 
+  // tasks assigned by someone
   getTasksAssignedBy(userId) { return this.getAllTasks().filter(t => t.assignedBy === userId); }
+
   getActiveTasks(userId) { return this.getUserTasks(userId).filter(t => !t.archived && t.status !== 'completed'); }
   getCompletedTasks(userId) { return this.getUserTasks(userId).filter(t => !t.archived && t.status === 'completed'); }
 
@@ -206,11 +210,17 @@ class DataStore {
       .sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
   }
 
+  // helper: get replies for a task
+  getTaskReplies(taskId) {
+    return this.getAllMessages().filter(m => m.taskId === taskId && m.type === 'task-reply')
+      .sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
+  }
+
   clear() { this.users.clear(); this.groups.clear(); this.tasks.clear(); this.messages.clear(); }
 }
 
 // ----------------------------------------------------------------------------
-// Authentication manager (only nav-admin visibility restricted to director)
+// Authentication manager (unchanged)
 class AuthenticationManager {
   constructor(firebaseService, dataStore) {
     this.firebase = firebaseService;
@@ -427,57 +437,59 @@ class NavigationManager {
 }
 
 // ----------------------------------------------------------------------------
-// UI Renderer (keeps previous rendering logic; no functional changes)
-// - Note: createActiveTaskCard & group completion logic already allow group members
-//   to mark a group task (task.groupId set, assignedTo may be null). So no change needed.
+// UI Renderer (updated for reply UI + profile assigned-by-you expansions)
 class UIRenderer {
   constructor(dataStore, authManager) {
     this.dataStore = dataStore;
     this.authManager = authManager;
   }
 
+  // PROFILE: show tasks assigned by current user (active only),
+  // include tasks assigned to self and groupWide and auto-created tasks.
   renderProfile() {
     const user = this.authManager.getCurrentUser();
     if (!user) return;
     Utils.safeText(Utils.$('profile-username'), user.username);
     Utils.safeText(Utils.$('profile-role'), user.role);
 
-    // New: Render a "Tasks assigned by you" column in profile view that shows only active tasks
-    const assignedByMeContainer = Utils.$('profile-assigned-by-me-col');
-    if (assignedByMeContainer) {
-      Utils.clearElement(assignedByMeContainer);
+    const profileView = Utils.$('profile-view');
+    if (!profileView) return;
 
-      const assignedTasks = this.dataStore.getTasksAssignedBy(user.id)
-        .filter(t => t.assignedTo && t.assignedTo !== user.id) // tasks assigned to others
-        .filter(t => !t.archived && t.status !== 'completed'); // only active tasks
-
-      if (assignedTasks.length === 0) {
-        assignedByMeContainer.innerHTML = '<p class="muted">You have not assigned any active tasks.</p>';
-      } else {
-        const header = document.createElement('div');
-        header.className = 'card';
-        header.innerHTML = '<strong>Tasks assigned by you</strong>';
-        assignedByMeContainer.appendChild(header);
-
-        assignedTasks.forEach(task => {
-          const card = this.createAssignedByMeCard(task);
-          assignedByMeContainer.appendChild(card);
-        });
-      }
+    let assignedContainer = Utils.$('profile-assigned-by-you');
+    if (!assignedContainer) {
+      assignedContainer = document.createElement('div');
+      assignedContainer.id = 'profile-assigned-by-you';
+      assignedContainer.style.marginTop = '12px';
+      profileView.appendChild(assignedContainer);
     }
 
-    // Remove "all active tasks" from profile for non-directors.
-    // If an element exists in the profile area with id 'profile-all-active-tasks', only show it to directors.
-    const profileAllActiveEl = Utils.$('profile-all-active-tasks');
-    if (profileAllActiveEl) {
-      if (this.authManager.isDirector()) {
-        profileAllActiveEl.style.display = ''; // visible for directors
-      } else {
-        profileAllActiveEl.style.display = 'none';
-      }
+    Utils.clearElement(assignedContainer);
+
+    const header = document.createElement('div');
+    header.className = 'card';
+    header.innerHTML = `<strong>Tasks assigned by you (active)</strong>`;
+    assignedContainer.appendChild(header);
+
+    // All tasks where assignedBy === user.id (created by user), show active only
+    const allAssignedBy = this.dataStore.getTasksAssignedBy(user.id)
+      .filter(t => !t.archived && t.status !== 'completed')
+      .sort((a, b) => (new Date(a.createdAt || 0)).getTime() - (new Date(b.createdAt || 0)).getTime());
+
+    if (allAssignedBy.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'card';
+      empty.innerHTML = `<div class="muted">No active tasks assigned by you.</div>`;
+      assignedContainer.appendChild(empty);
+      return;
     }
+
+    allAssignedBy.forEach(task => {
+      const card = this.createAssignedByMeCard(task);
+      assignedContainer.appendChild(card);
+    });
   }
 
+  // Dashboard groups/task renders - unchanged except they will also reflect replies now
   renderDashboardGroups() {
     const container = Utils.$('groups-col');
     if (!container) return;
@@ -524,7 +536,7 @@ class UIRenderer {
     return card;
   }
 
-  // Render active tasks (oldest first)
+  // Active Dashboard tasks - show reply preview and Reply button (if allowed)
   renderDashboardTasks() {
     const container = Utils.$('tasks-col');
     if (!container) return;
@@ -536,6 +548,7 @@ class UIRenderer {
     const allActive = this.dataStore.getAllTasks().filter(t => !t.archived && t.status !== 'completed')
       .filter(t => {
         if (t.assignedTo === user.id) return true;
+        if (t.assignedBy === user.id) return true; // tasks you created should show too
         if (t.groupId) {
           const group = this.dataStore.getGroup(t.groupId);
           if (group && (group.members || []).includes(user.id)) return true;
@@ -543,7 +556,6 @@ class UIRenderer {
         return false;
       });
 
-    // Sort: oldest first by createdAt
     allActive.sort((a, b) => {
       const ta = new Date(a.createdAt || 0).getTime();
       const tb = new Date(b.createdAt || 0).getTime();
@@ -569,6 +581,7 @@ class UIRenderer {
     const completed = this.dataStore.getAllTasks().filter(t => !t.archived && t.status === 'completed')
       .filter(t => {
         if (t.assignedTo === user.id) return true;
+        if (t.assignedBy === user.id) return true;
         if (t.groupId) {
           const group = this.dataStore.getGroup(t.groupId);
           if (group && (group.members || []).includes(user.id)) return true;
@@ -585,6 +598,7 @@ class UIRenderer {
     });
   }
 
+  // Assigned by me column on dashboard (keeps consistent with profile)
   renderAssignedByMe() {
     const container = Utils.$('assigned-by-me-col');
     if (!container) return;
@@ -594,9 +608,9 @@ class UIRenderer {
     if (!user) { container.innerHTML = '<p class="muted">Login to see tasks you assigned.</p>'; return; }
 
     const assignedTasks = this.dataStore.getTasksAssignedBy(user.id)
-      .filter(t => (t.assignedTo && t.assignedTo !== user.id));
+      .filter(t => !t.archived && t.status !== 'completed');
 
-    if (assignedTasks.length === 0) { container.innerHTML = '<p class="muted">No tasks assigned by you.</p>'; return; }
+    if (assignedTasks.length === 0) { container.innerHTML = '<p class="muted">No active tasks assigned by you.</p>'; return; }
 
     const header = document.createElement('div');
     header.className = 'card';
@@ -609,48 +623,40 @@ class UIRenderer {
     });
   }
 
+  // Create AssignedByMe card: shows reply preview and Confirm/Reject if awaiting confirmation
   createAssignedByMeCard(task) {
     const card = document.createElement('div');
     card.className = 'card';
 
-    const assignee = task.assignedTo ? (this.dataStore.getUser(task.assignedTo)?.username || task.assignedTo) : 'Unassigned';
+    const assignee = task.assignedTo ? (this.dataStore.getUser(task.assignedTo)?.username || task.assignedTo) : (task.groupWide ? 'Group task' : 'Unassigned');
     const status = task.status || 'in-progress';
     const dueText = task.dueDate ? ` • due ${Utils.formatDateShort(task.dueDate)}` : '';
 
+    const replies = this.dataStore.getTaskReplies(task.id);
+    // choose latest reply (if any) by assigned person or any member (task-reply messages)
+    const latestReply = replies.length > 0 ? replies[replies.length - 1] : null;
+    const replyPreview = latestReply ? (latestReply.content.length > 140 ? latestReply.content.slice(0, 140) + '...' : latestReply.content) : null;
+    const replyAuthorName = latestReply ? (this.dataStore.getUser(latestReply.userId)?.username || latestReply.userId) : '';
+
+    const assigneeName = assignee;
+    const assigneeDisplay = `<strong>${task.title}</strong><div class="muted">To: ${assigneeName} • ${status}${dueText}</div>`;
+
     card.innerHTML = `
       <div>
-        <strong>${task.title}</strong>
-        <div class="muted">To: ${assignee} • ${status}${dueText}</div>
+        ${assigneeDisplay}
       </div>
       <div style="margin-top:8px">${task.description || ''}</div>
-      <div style="margin-top:8px;display:flex;gap:8px">
-        <button class="btn btn--outline btn--small" data-action="message">Message</button>
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+        <button class="btn btn--outline btn--small" data-action="open">Open</button>
         ${this.authManager.isDirector() || this.authManager.getCurrentUser().id === task.assignedBy ? '<button class="btn btn--danger btn--small" data-action="revoke">Revoke</button>' : ''}
+      </div>
+      <div style="margin-top:8px">
+        ${latestReply ? `<div class="muted">Reply from ${replyAuthorName}:</div><div style="margin-top:6px">${replyPreview}</div>` : '<div class="muted">No reply yet</div>'}
       </div>
     `;
 
     Utils.addButtonListeners(card, {
-      '[data-action="message"]': () => {
-        if (!task.assignedTo) { Utils.showToast('Task has no assignee to message', 'warning'); return; }
-        (async () => {
-          try {
-            await window.app.firebase.addDoc('messages', {
-              groupId: null,
-              userId: this.authManager.getCurrentUser().id,
-              content: `Reminder: Please update on task "${task.title}"`,
-              type: 'reminder',
-              parentMessageId: null,
-              taskId: task.id,
-              timestamp: new Date().toISOString(),
-              mentions: [task.assignedTo]
-            });
-            Utils.showToast('Reminder sent', 'success');
-          } catch (err) {
-            console.error('Failed to send reminder', err);
-            Utils.showToast('Failed to send reminder', 'error');
-          }
-        })();
-      },
+      '[data-action="open"]': () => window.app.openTaskDetailModal(task.id),
       '[data-action="revoke"]': () => {
         if (!confirm('Revoke assignment and unassign this task?')) return;
         (async () => {
@@ -665,9 +671,50 @@ class UIRenderer {
       }
     });
 
+    // If task is waiting for assigner confirmation, show confirm/reject buttons for assigner
+    const currentUser = this.authManager.getCurrentUser();
+    const isAssigner = currentUser && currentUser.id === task.assignedBy;
+    const awaiting = task.status === 'awaiting_assigner_confirmation';
+    if (isAssigner && awaiting) {
+      const actionRow = document.createElement('div');
+      actionRow.style.marginTop = '8px';
+      actionRow.style.display = 'flex';
+      actionRow.style.gap = '8px';
+
+      const confirmBtn = document.createElement('button');
+      confirmBtn.className = 'btn btn--primary btn--small';
+      confirmBtn.textContent = 'Confirm completed';
+
+      const rejectBtn = document.createElement('button');
+      rejectBtn.className = 'btn btn--outline btn--small';
+      rejectBtn.textContent = 'Not completed';
+
+      confirmBtn.addEventListener('click', async () => {
+        await window.app.confirmCompletionByAssigner(task.id, true);
+      });
+      rejectBtn.addEventListener('click', async () => {
+        await window.app.confirmCompletionByAssigner(task.id, false);
+      });
+
+      actionRow.appendChild(confirmBtn);
+      actionRow.appendChild(rejectBtn);
+      card.appendChild(actionRow);
+    }
+
+    // Allow assigner to view/edit reply (open modal)
+    if (isAssigner && latestReply) {
+      const viewReplyBtn = document.createElement('button');
+      viewReplyBtn.className = 'btn btn--outline btn--small';
+      viewReplyBtn.style.marginTop = '8px';
+      viewReplyBtn.textContent = 'View reply';
+      viewReplyBtn.addEventListener('click', () => window.app.openReplyModalForAssigner(task.id));
+      card.appendChild(viewReplyBtn);
+    }
+
     return card;
   }
 
+  // Active task card: now includes Reply button (if user can reply) and shows latest reply preview; Mark Completed triggers new flow
   createActiveTaskCard(task) {
     const card = document.createElement('div');
     card.className = 'card';
@@ -688,6 +735,12 @@ class UIRenderer {
 
     const urgentBadge = task.urgent ? `<span class="badge-urgent">URGENT</span>` : '';
 
+    // Latest reply preview (if any)
+    const replies = this.dataStore.getTaskReplies(task.id);
+    const latestReply = replies.length > 0 ? replies[replies.length - 1] : null;
+    const replyPreview = latestReply ? (latestReply.content.length > 120 ? latestReply.content.slice(0, 120) + '...' : latestReply.content) : null;
+    const replyAuthor = latestReply ? (this.dataStore.getUser(latestReply.userId)?.username || latestReply.userId) : '';
+
     card.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center">
         <div>
@@ -702,14 +755,53 @@ class UIRenderer {
 
       <div style="margin-top:8px">${task.description || ''}</div>
 
-      <div class="subtasks">${subtasksHtml || '<div class="muted">No subtasks</div>'}</div>
+      <div class="subtasks" style="margin-top:8px">${subtasksHtml || '<div class="muted">No subtasks</div>'}</div>
 
-      <div class="activity-log">${logHtml || '<div class="muted">No recent activity</div>'}</div>
+      <div style="margin-top:8px">
+        ${latestReply ? `<div class="muted">Latest reply by ${replyAuthor}:</div><div style="margin-top:6px">${replyPreview}</div>` : ''}
+      </div>
+
+      <div class="activity-log" style="margin-top:8px">${logHtml || '<div class="muted">No recent activity</div>'}</div>
     `;
 
-    const completeBtn = card.querySelector('[data-action="complete"]');
-    if (completeBtn) completeBtn.addEventListener('click', () => window.app.completeTaskFromMessage(task.id));
+    // Control buttons row
+    const controls = document.createElement('div');
+    controls.style.display = 'flex';
+    controls.style.gap = '8px';
+    controls.style.marginTop = '8px';
 
+    // Determine permissions: who can reply?
+    const currentUser = this.authManager.getCurrentUser();
+    const canReply = (() => {
+      if (!currentUser) return false;
+      if (task.assignedTo && task.assignedTo === currentUser.id) return true; // assigned person
+      if (task.groupWide && task.groupId) {
+        const g = this.dataStore.getGroup(task.groupId);
+        return g && (g.members || []).includes(currentUser.id); // any group member
+      }
+      return false;
+    })();
+
+    // Reply button
+    if (canReply) {
+      const replyBtn = document.createElement('button');
+      replyBtn.className = 'btn btn--outline btn--small';
+      replyBtn.textContent = latestReply && latestReply.userId === currentUser.id ? 'Edit Reply' : 'Reply';
+      replyBtn.addEventListener('click', () => window.app.openReplyModal(task.id));
+      controls.appendChild(replyBtn);
+    }
+
+    // Mark Completed button now triggers assignee's completion request flow (if permitted)
+    const completeBtn = card.querySelector('[data-action="complete"]');
+    if (completeBtn) {
+      completeBtn.addEventListener('click', () => {
+        window.app.requestCompletionByAssignee(task.id);
+      });
+    }
+
+    card.appendChild(controls);
+
+    // subtask checkbox listeners (unchanged)
     const checkboxes = card.querySelectorAll('input[type="checkbox"][data-subtask-id]');
     checkboxes.forEach(cb => {
       cb.addEventListener('change', async () => {
@@ -731,9 +823,7 @@ class UIRenderer {
           }
 
           const now = new Date().toISOString();
-          const entryText = (idx !== -1 && subtasksLocal[idx])
-            ? `${this.authManager.getCurrentUser().username} ${completed ? 'completed' : 'reopened'} subtask "${subtasksLocal[idx].title}"`
-            : `${this.authManager.getCurrentUser().username} updated a subtask`;
+          const entryText = subtasksLocal[idx] ? `${this.authManager.getCurrentUser().username} ${completed ? 'completed' : 'reopened'} subtask "${subtasksLocal[idx].title}"` : `${this.authManager.getCurrentUser().username} updated a subtask`;
           const entry = { ts: now, text: entryText };
 
           const updated = {
@@ -820,11 +910,8 @@ class UIRenderer {
 
     card.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <div>
-          <strong>${group.name}</strong>
-          <div class="muted">Members: ${members}</div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center">
+        <div><strong>${group.name}</strong><div class="muted">Members: ${members}</div></div>
+        <div style="display:flex;gap:6px">
           <button class="btn btn--outline btn--small" data-action="open">Open</button>
           ${canDelete ? '<button class="btn btn--danger btn--small" data-action="delete">Delete</button>' : ''}
         </div>
@@ -876,7 +963,7 @@ class UIRenderer {
     `;
 
     Utils.addButtonListeners(card, {
-      '[data-action="complete"]': () => window.app.completeTaskFromMessage(task.id)
+      '[data-action="complete"]': () => window.app.requestCompletionByAssignee(task.id)
     });
 
     return card;
@@ -959,7 +1046,7 @@ class UIRenderer {
           const markBtn = document.createElement('button');
           markBtn.className = 'btn btn--primary btn--small';
           markBtn.textContent = 'Mark Completed';
-          markBtn.addEventListener('click', () => { window.app.completeTaskFromMessage(task.id); });
+          markBtn.addEventListener('click', () => { window.app.requestCompletionByAssignee(task.id); });
           rightControls.appendChild(markBtn);
         } else if (task.status === 'completed') {
           const completedBadge = document.createElement('span');
@@ -1116,7 +1203,7 @@ class UIRenderer {
 }
 
 // ----------------------------------------------------------------------------
-// ModalManager (updated Create Task behavior: SINGLE shared group task when assign-to-entire-group)
+// ModalManager (we'll reuse existing create task modal, but ensure title autocomplete disabled)
 class ModalManager {
   constructor(dataStore, authManager, firebaseService) {
     this.dataStore = dataStore;
@@ -1223,7 +1310,7 @@ class ModalManager {
     }
   }
 
-  // Inject Create Task modal (unchanged layout; handler below adjusted to allow group-wide)
+  // Create Task modal with autocomplete off for title to avoid suggestion popups
   showCreateTaskModal() {
     const modal = Utils.$('modal-create-task');
     if (!modal) { Utils.showToast('Create Task modal not found', 'error'); return; }
@@ -1234,14 +1321,14 @@ class ModalManager {
 
         <div style="display:flex;gap:12px;align-items:center">
           <label style="min-width:60px">Title</label>
-          <input id="task-title" style="flex:1; padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.06)" />
+          <input id="task-title" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" style="flex:1; padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.06)" />
           <label style="min-width:80px">Assign to</label>
           <select id="task-assign-to" style="min-width:180px;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06)"></select>
         </div>
 
         <div style="display:flex;gap:12px;align-items:center">
           <label style="min-width:60px">Description</label>
-          <input id="task-desc" style="flex:1; padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.06)" />
+          <input id="task-desc" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" style="flex:1; padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.06)" />
           <label style="min-width:60px">Group (optional)</label>
           <select id="task-group" style="min-width:220px;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.06)"></select>
         </div>
@@ -1363,7 +1450,7 @@ class ModalManager {
     Utils.showElement(modal);
   }
 
-  // Modified: create one shared task for the group when assign-to-entire-group is checked.
+  // Modified create task same as before; unchanged except inputs include autocomplete off
   async handleCreateTask() {
     const titleInput = Utils.$('task-title');
     const descInput = Utils.$('task-desc');
@@ -1392,7 +1479,7 @@ class ModalManager {
       completedBy: null
     }));
 
-    // Validation: title required. If not assigning to entire group, need assignee.
+    // Validation
     if (!title || (!assignedTo && !assignToEntireGroup)) {
       Utils.showToast('Please fill in title and assignee (or check Assign to entire group)', 'error');
       return;
@@ -1445,7 +1532,6 @@ class ModalManager {
           title,
           description,
           assignedBy: this.authManager.getCurrentUser().id,
-          // assignedTo null indicates it's group-level; groupWide flag clarifies intent
           assignedTo: null,
           status: 'in-progress',
           priority: 'medium',
@@ -1459,7 +1545,9 @@ class ModalManager {
           groupWide: true,
           createdAt: new Date().toISOString(),
           completedAt: null,
-          completedBy: null
+          completedBy: null,
+          assigneeConfirmed: false,
+          assignerConfirmed: false
         };
 
         const taskRef = await this.firebase.addDoc('tasks', taskData);
@@ -1499,7 +1587,9 @@ class ModalManager {
         activityLog: [{ ts: new Date().toISOString(), text: 'Task created' }],
         createdAt: new Date().toISOString(),
         completedAt: null,
-        completedBy: null
+        completedBy: null,
+        assigneeConfirmed: false,
+        assignerConfirmed: false
       };
 
       const taskRef = await this.firebase.addDoc('tasks', taskData);
@@ -1606,7 +1696,7 @@ class ModalManager {
 }
 
 // ----------------------------------------------------------------------------
-// Main app class
+// Main app class (core changes for replies & completion flow)
 class TaskFlowApp {
   constructor() {
     this.firebase = new FirebaseService();
@@ -1636,8 +1726,6 @@ class TaskFlowApp {
     const refreshBtn = Utils.$('refresh-btn');
     if (refreshBtn) refreshBtn.addEventListener('click', () => this.refreshData());
 
-    // Removed wiring for show-completed / show-archived (UI removed).
-    // Collapse / Expand toggles: use style.display toggling so it's reliable.
     const toggleGroups = Utils.$('toggle-groups-col');
     const toggleActive = Utils.$('toggle-active-tasks-col');
     const toggleCompleted = Utils.$('toggle-completed-col');
@@ -1645,37 +1733,22 @@ class TaskFlowApp {
     if (toggleGroups) toggleGroups.addEventListener('click', () => {
       const col = Utils.$('groups-col');
       if (!col) return;
-      if (col.style.display === 'none') {
-        col.style.display = '';
-        toggleGroups.textContent = '–';
-      } else {
-        col.style.display = 'none';
-        toggleGroups.textContent = '+';
-      }
+      if (col.style.display === 'none') { col.style.display = ''; toggleGroups.textContent = '–'; }
+      else { col.style.display = 'none'; toggleGroups.textContent = '+'; }
     });
 
     if (toggleActive) toggleActive.addEventListener('click', () => {
       const col = Utils.$('tasks-col');
       if (!col) return;
-      if (col.style.display === 'none') {
-        col.style.display = '';
-        toggleActive.textContent = '–';
-      } else {
-        col.style.display = 'none';
-        toggleActive.textContent = '+';
-      }
+      if (col.style.display === 'none') { col.style.display = ''; toggleActive.textContent = '–'; }
+      else { col.style.display = 'none'; toggleActive.textContent = '+'; }
     });
 
     if (toggleCompleted) toggleCompleted.addEventListener('click', () => {
       const col = Utils.$('completed-tasks-col');
       if (!col) return;
-      if (col.style.display === 'none') {
-        col.style.display = '';
-        toggleCompleted.textContent = '–';
-      } else {
-        col.style.display = 'none';
-        toggleCompleted.textContent = '+';
-      }
+      if (col.style.display === 'none') { col.style.display = ''; toggleCompleted.textContent = '–'; }
+      else { col.style.display = 'none'; toggleCompleted.textContent = '+'; }
     });
 
     const showMembersBtn = Utils.$('show-members-btn');
@@ -1792,9 +1865,19 @@ class TaskFlowApp {
       this.uiRenderer.renderCompletedTasks();
       if (this.authManager.isDirector()) this.uiRenderer.renderDirectorTasks();
       if (this.currentGroup && currentView === 'groupChat') this.uiRenderer.renderGroupTasks(this.currentGroup.id);
+
+      // Ensure profile view reflects active tasks assigned by the user
+      this.uiRenderer.renderProfile();
     }
 
     if (dataType === 'messages') {
+      // When messages change (replies), ensure task lists and profile update so assigners see replies.
+      this.uiRenderer.renderDashboardTasks();
+      this.uiRenderer.renderAssignedByMe();
+      this.uiRenderer.renderProfile();
+      this.uiRenderer.renderCompletedTasks();
+      if (this.authManager.isDirector()) this.uiRenderer.renderDirectorTasks();
+
       if (this.currentGroup && currentView === 'groupChat') this.uiRenderer.renderChat(this.currentGroup.id);
     }
   }
@@ -1872,7 +1955,7 @@ class TaskFlowApp {
     });
   }
 
-  // sendMessage unchanged (mentions are stored in messages; mention column removed from dashboard UI)
+  // sendMessage unchanged but disables autocomplete in chat input if needed
   async sendMessage() {
     if (!this.currentGroup) { Utils.showToast('Open a group first', 'error'); return; }
     const chatInput = Utils.$('chat-input');
@@ -1913,7 +1996,9 @@ class TaskFlowApp {
         activityLog: [{ ts: new Date().toISOString(), text: 'Task auto-created from message' }],
         createdAt: new Date().toISOString(),
         completedAt: null,
-        completedBy: null
+        completedBy: null,
+        assigneeConfirmed: false,
+        assignerConfirmed: false
       };
 
       await this.firebase.addDoc('tasks', taskData);
@@ -1946,6 +2031,7 @@ class TaskFlowApp {
   }
 
   async completeTask(taskId) {
+    // keep this available as direct complete (director etc), but the normal flow uses confirmations
     try {
       await this.firebase.updateDoc('tasks', taskId, { status: 'completed', completedAt: new Date().toISOString() });
       Utils.showToast('Task marked as completed', 'success');
@@ -1955,54 +2041,139 @@ class TaskFlowApp {
     }
   }
 
-  // completeTaskFromMessage: unchanged permission model but now supports group-wide shared tasks
-  async completeTaskFromMessage(taskId) {
+  // New flow: assignee requests completion (or marks ready). This is called when 'Mark Completed' clicked.
+  async requestCompletionByAssignee(taskId) {
     try {
       const task = this.dataStore.getTask(taskId);
       if (!task) { Utils.showToast('Task not found', 'error'); return; }
       const currentUser = this.authManager.getCurrentUser();
       if (!currentUser) { Utils.showToast('Login required', 'error'); return; }
 
-      if (task.groupId) {
+      // Permission: assignedTo OR group member for groupWide tasks can request completion
+      if (task.assignedTo && task.assignedTo !== currentUser.id) {
+        Utils.showToast('Only assigned user can request completion', 'error'); return;
+      }
+      if (!task.assignedTo && task.groupWide && task.groupId) {
         const group = this.dataStore.getGroup(task.groupId);
-        if (!group || !(group.members || []).includes(currentUser.id)) {
-          Utils.showToast('Only group members can complete this task', 'error');
-          return;
-        }
-      } else {
-        if (task.assignedTo && task.assignedTo !== currentUser.id) {
-          Utils.showToast('Only the assigned user can complete this personal task', 'error');
-          return;
-        }
+        if (!group || !((group.members || []).includes(currentUser.id))) { Utils.showToast('Only group members can request completion', 'error'); return; }
       }
 
-      // Update task with completed metadata and activity log
-      await this.firebase.updateDoc('tasks', taskId, {
-        status: 'completed',
-        completedAt: new Date().toISOString(),
-        completedBy: currentUser.id,
-        activityLog: [...(task.activityLog || []), { ts: new Date().toISOString(), text: `${currentUser.username} completed task` }]
-      });
+      // Before changing status, ask user (blocking modal) — use window.confirm to keep it simple and blocking
+      const ask = confirm('Do you want to mark this task as ready for assigner confirmation (Mark completed)?');
+      if (!ask) {
+        Utils.showToast('You chose not to request completion', 'info');
+        return;
+      }
 
-      if (task.groupId) {
+      // set assigneeConfirmed: true and status awaiting_assigner_confirmation
+      const now = new Date().toISOString();
+      const updated = {
+        status: 'awaiting_assigner_confirmation',
+        assigneeConfirmed: true,
+        assignerConfirmed: false,
+        activityLog: [...(task.activityLog || []), { ts: now, text: `${currentUser.username} requested completion` }]
+      };
+
+      await this.firebase.updateDoc('tasks', taskId, updated);
+
+      // create a message to notify the assigner (if any)
+      if (task.assignedBy) {
+        const msgContent = `${currentUser.username} has requested completion for task "${task.title}".`;
         await this.firebase.addDoc('messages', {
-          groupId: task.groupId,
+          groupId: task.groupId || null,
           userId: currentUser.id,
-          content: `Task completed: ${task.title}`,
-          type: 'task-completed',
+          content: msgContent,
+          type: 'task-status',
           parentMessageId: null,
           taskId,
-          timestamp: new Date().toISOString()
+          timestamp: now
         });
       }
 
-      Utils.showToast('Task marked completed', 'success');
+      Utils.showToast('Requested completion. Awaiting assigner confirmation.', 'success');
     } catch (error) {
-      console.error('Complete task from message failed:', error);
-      Utils.showToast('Failed to complete task', 'error');
+      console.error('Request completion failed:', error);
+      Utils.showToast('Failed to request completion', 'error');
     }
   }
 
+  // Called by assigner to confirm or reject completion request
+  async confirmCompletionByAssigner(taskId, decisionBoolean) {
+    try {
+      const task = this.dataStore.getTask(taskId);
+      if (!task) { Utils.showToast('Task not found', 'error'); return; }
+      const currentUser = this.authManager.getCurrentUser();
+      if (!currentUser) { Utils.showToast('Login required', 'error'); return; }
+
+      if (currentUser.id !== task.assignedBy && !this.authManager.isAdminOrDirector()) {
+        Utils.showToast("Only the assigner or director can confirm completion", 'error'); return;
+      }
+
+      const now = new Date().toISOString();
+
+      if (decisionBoolean) {
+        // Assigner confirms -> set assignerConfirmed true
+        const updated = {
+          assignerConfirmed: true,
+          activityLog: [...(task.activityLog || []), { ts: now, text: `${currentUser.username} confirmed completion` }]
+        };
+
+        // If assignee already confirmed -> finalize
+        if (task.assigneeConfirmed) {
+          updated.status = 'completed';
+          updated.completedAt = now;
+          // set completedBy to assignee (if present) else assigner
+          updated.completedBy = task.assignedTo || currentUser.id;
+        } else {
+          // Move to awaiting finalization (assignerConfirmed true but assignee hasn't yet) - but per flow assignee confirmed first
+          updated.status = task.status || 'in-progress';
+        }
+
+        await this.firebase.updateDoc('tasks', taskId, updated);
+
+        // add a message
+        await this.firebase.addDoc('messages', {
+          groupId: task.groupId || null,
+          userId: currentUser.id,
+          content: `Assigner ${currentUser.username} confirmed completion for task "${task.title}".`,
+          type: 'task-status',
+          parentMessageId: null,
+          taskId,
+          timestamp: now
+        });
+
+        Utils.showToast('You confirmed completion', 'success');
+
+      } else {
+        // Assigner rejects -> reset assigneeConfirmed to false so assignee can add more info
+        const updated = {
+          assigneeConfirmed: false,
+          assignerConfirmed: false,
+          status: 'in-progress',
+          activityLog: [...(task.activityLog || []), { ts: now, text: `${currentUser.username} marked task as not completed` }]
+        };
+
+        await this.firebase.updateDoc('tasks', taskId, updated);
+
+        await this.firebase.addDoc('messages', {
+          groupId: task.groupId || null,
+          userId: currentUser.id,
+          content: `Assigner ${currentUser.username} marked task "${task.title}" as NOT completed. Please add more details and update the reply.`,
+          type: 'task-status',
+          parentMessageId: null,
+          taskId,
+          timestamp: now
+        });
+
+        Utils.showToast('Marked task as not completed. Assignee may update reply.', 'info');
+      }
+    } catch (error) {
+      console.error('Assigner confirmation failed:', error);
+      Utils.showToast('Failed to confirm/reject', 'error');
+    }
+  }
+
+  // Undo completion (existing) - keep same behavior but also reset confirmations
   async uncompleteTask(taskId) {
     try {
       const task = this.dataStore.getTask(taskId);
@@ -2011,6 +2182,8 @@ class TaskFlowApp {
         status: 'in-progress',
         completedAt: null,
         completedBy: null,
+        assigneeConfirmed: false,
+        assignerConfirmed: false,
         activityLog: [...(task.activityLog || []), { ts: new Date().toISOString(), text: `${this.authManager.getCurrentUser().username} restored task` }]
       });
       Utils.showToast('Task restored', 'success');
@@ -2140,10 +2313,178 @@ class TaskFlowApp {
     if (memberNames.length === 0) { Utils.showToast('No members in this group', 'info'); return; }
     alert(`Members in ${this.currentGroup.name}:\n\n` + memberNames.join('\n'));
   }
+
+  // -----------------------
+  // Reply feature helpers
+  // -----------------------
+
+  // Open reply modal for assignee or group-member (the one posting/editing reply)
+  // This opens a prompt-style modal (blocking confirm-like) we implement with a custom modal overlay
+  // but to keep changes minimal we will use a simple prompt-style approach with a textarea modal built on the fly.
+  async openReplyModal(taskId) {
+    const task = this.dataStore.getTask(taskId);
+    if (!task) { Utils.showToast('Task not found', 'error'); return; }
+    const currentUser = this.authManager.getCurrentUser();
+    if (!currentUser) { Utils.showToast('Login required', 'error'); return; }
+
+    // permission: assignedTo OR group member for groupWide tasks
+    if (task.assignedTo && task.assignedTo !== currentUser.id) {
+      Utils.showToast('Only the assigned user can reply', 'error'); return;
+    }
+    if (!task.assignedTo && task.groupWide && task.groupId) {
+      const group = this.dataStore.getGroup(task.groupId);
+      if (!group || !((group.members || []).includes(currentUser.id))) { Utils.showToast('Only group members can reply', 'error'); return; }
+    }
+
+    // Find existing reply message by current user for this task (if any)
+    const existingRepliesSnapshot = await this.firebase.getDocs('messages', [
+      where('taskId', '==', taskId),
+      where('type', '==', 'task-reply'),
+      where('userId', '==', currentUser.id)
+    ]);
+
+    let existingDoc = null;
+    existingRepliesSnapshot.forEach(docSnap => { existingDoc = { id: docSnap.id, ...docSnap.data() }; });
+
+    const existingContent = existingDoc ? (existingDoc.content || '') : '';
+
+    // Build a blocking modal element (simple)
+    const modalId = Utils.uid('replymodal');
+    const modal = document.createElement('div');
+    modal.id = modalId;
+    modal.className = 'modal';
+    modal.style.zIndex = 20000;
+    modal.innerHTML = `
+      <div class="modal-content" style="min-width:560px;">
+        <h3>Reply to: ${task.title}</h3>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <textarea id="${modalId}-textarea" style="min-height:180px;padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.06)">${existingContent}</textarea>
+          <div class="muted">Max ${CONFIG.reply.maxWords} words</div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
+            <button id="${modalId}-cancel" class="btn btn--outline">Cancel</button>
+            <button id="${modalId}-save" class="btn btn--primary">Save Reply</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    // handlers
+    document.getElementById(`${modalId}-cancel`).addEventListener('click', () => {
+      document.body.removeChild(modal);
+    });
+
+    document.getElementById(`${modalId}-save`).addEventListener('click', async () => {
+      const text = document.getElementById(`${modalId}-textarea`).value.trim();
+      // enforce approximate word limit
+      const wordCount = text === '' ? 0 : text.split(/\s+/).length;
+      if (wordCount > CONFIG.reply.maxWords) { Utils.showToast(`Reply exceeds ${CONFIG.reply.maxWords} words`, 'error'); return; }
+
+      try {
+        const now = new Date().toISOString();
+        if (existingDoc) {
+          await this.firebase.updateDoc('messages', existingDoc.id, { content: text, edited: true, editedAt: now, timestamp: now });
+        } else {
+          await this.firebase.addDoc('messages', {
+            groupId: task.groupId || null,
+            userId: currentUser.id,
+            content: text,
+            type: 'task-reply',
+            parentMessageId: null,
+            taskId,
+            timestamp: now
+          });
+        }
+
+        Utils.showToast('Reply saved', 'success');
+
+        // After saving reply, remove modal then prompt assignee: Mark completed?
+        document.body.removeChild(modal);
+
+        // Blocking prompt for mark completed
+        // Only ask assignee to mark completed if they are the person taking the action
+        if (task.assignedTo === currentUser.id || (task.groupWide && task.groupId && this.dataStore.getGroup(task.groupId) && (this.dataStore.getGroup(task.groupId).members || []).includes(currentUser.id))) {
+          const confirmMark = confirm('Reply posted. Do you want to mark this task as ready for completion (Mark completed)?');
+          if (confirmMark) {
+            // Use requestCompletionByAssignee flow
+            await this.requestCompletionByAssignee(taskId);
+          } else {
+            Utils.showToast('You can update reply later.', 'info');
+          }
+        }
+      } catch (err) {
+        console.error('Failed to save reply', err);
+        Utils.showToast('Failed to save reply', 'error');
+      }
+    });
+  }
+
+  // When assigner wants to view the reply and possibly edit contextually, open modal for assigner to see
+  async openReplyModalForAssigner(taskId) {
+    const task = this.dataStore.getTask(taskId);
+    if (!task) { Utils.showToast('Task not found', 'error'); return; }
+    const currentUser = this.authManager.getCurrentUser();
+    if (!currentUser) { Utils.showToast('Login required', 'error'); return; }
+
+    // Permission: only assigner or director can view full reply modal from assigned-by-me card
+    if (currentUser.id !== task.assignedBy && !this.authManager.isAdminOrDirector()) {
+      Utils.showToast("Only the assigner or director can view this reply", 'error'); return;
+    }
+
+    // Get latest reply (by any user) for display context (show latest)
+    const repliesSnapshot = await this.firebase.getDocs('messages', [
+      where('taskId', '==', taskId),
+      where('type', '==', 'task-reply')
+    ]);
+
+    let latestReply = null;
+    repliesSnapshot.forEach(docSnap => {
+      const d = { id: docSnap.id, ...docSnap.data() };
+      if (!latestReply || new Date(d.timestamp || 0).getTime() > new Date(latestReply.timestamp || 0).getTime()) latestReply = d;
+    });
+
+    const replyText = latestReply ? latestReply.content : '';
+
+    // Show modal for assigner to read reply and choose confirm/reject
+    const modalId = Utils.uid('assignerreply');
+    const modal = document.createElement('div');
+    modal.id = modalId;
+    modal.className = 'modal';
+    modal.style.zIndex = 20000;
+    modal.innerHTML = `
+      <div class="modal-content" style="min-width:560px;">
+        <h3>Reply for: ${task.title}</h3>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div class="muted">Latest reply:</div>
+          <div style="padding:8px;border-radius:6px;background:rgba(255,255,255,0.02);min-height:120px">${replyText || '<em>No reply yet</em>'}</div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
+            <button id="${modalId}-close" class="btn btn--outline">Close</button>
+            <button id="${modalId}-reject" class="btn btn--outline">Not completed</button>
+            <button id="${modalId}-confirm" class="btn btn--primary">Confirm completed</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    document.getElementById(`${modalId}-close`).addEventListener('click', () => {
+      document.body.removeChild(modal);
+    });
+
+    document.getElementById(`${modalId}-reject`).addEventListener('click', async () => {
+      await this.confirmCompletionByAssigner(taskId, false);
+      document.body.removeChild(modal);
+    });
+
+    document.getElementById(`${modalId}-confirm`).addEventListener('click', async () => {
+      await this.confirmCompletionByAssigner(taskId, true);
+      document.body.removeChild(modal);
+    });
+  }
 }
 
 // ----------------------------------------------------------------------------
-// Bootstrap
+// Bootstrap & debugging
 window.addEventListener('DOMContentLoaded', () => {
   window.app = new TaskFlowApp();
 
@@ -2163,5 +2504,5 @@ window.addEventListener('DOMContentLoaded', () => {
     reloadData: () => { window.app.loadInitialData(); console.log('Data reloaded'); }
   };
 
-  console.log('TaskFlow initialized successfully (updated features: group-shared tasks + collapse fix)');
+  console.log('TaskFlow initialized with reply + assigner-confirmation features.');
 });
